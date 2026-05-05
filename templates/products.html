@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block page_title %}产品管理{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>产品列表</span>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+            <i class="bi bi-plus"></i> 新增产品
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr><th>ID</th><th>名称</th><th>单位</th><th>类型</th><th>分类</th><th>备注</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+                {% for p in products %}
+                <tr>
+                    <td>{{ p.id }}</td>
+                    <td class="fw-bold">{{ p.name }}</td>
+                    <td>{{ p.unit or '个' }}</td>
+                    <td><span class="badge bg-{{ 'primary' if p.product_type=='成品' else 'info' if p.product_type=='半成品' else 'secondary' }}">{{ p.product_type }}</span></td>
+                    <td>{{ p.category.name if p.category else '-' }}</td>
+                    <td class="text-muted">{{ p.notes[:15] if p.notes else '' }}</td>
+                    <td>
+                        <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal"
+                                data-bs-target="#editModal{{ p.id }}">编辑</button>
+                        <form method="post" action="{{ url_for('product_delete', id=p.id) }}" style="display:inline"
+                              onsubmit="return confirm('确定删除「{{ p.name }}」吗？')">
+                            <button class="btn btn-outline-danger btn-sm">删除</button>
+                        </form>
+                    </td>
+                </tr>
+                <div class="modal fade" id="editModal{{ p.id }}" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="post" action="{{ url_for('product_edit', id=p.id) }}">
+                                <div class="modal-header"><h5 class="modal-title">编辑产品</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">名称 <span class="text-danger">*</span></label>
+                                        <input name="name" class="form-control" value="{{ p.name }}" required>
+                                    </div>
+                                    <div class="row mb-3">
+                                        <div class="col">
+                                            <label class="form-label">单位</label>
+                                            <select name="unit" class="form-select">
+                                                {% for u in ['个','对','米','公斤','袋','条','根','盘','套'] %}
+                                                <option value="{{ u }}" {{ 'selected' if p.unit==u }}>{{ u }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                        <div class="col">
+                                            <label class="form-label">类型</label>
+                                            <select name="product_type" class="form-select">
+                                                {% for t in ['成品','半成品','原材料'] %}
+                                                <option value="{{ t }}" {{ 'selected' if p.product_type==t }}>{{ t }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                        <div class="col">
+                                            <label class="form-label">分类</label>
+                                            <select name="category_id" class="form-select">
+                                                <option value="">-</option>
+                                                {% for c in categories %}
+                                                <option value="{{ c.id }}" {{ 'selected' if p.category_id==c.id }}>{{ c.name }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">备注</label>
+                                        <textarea name="notes" class="form-control" rows="2">{{ p.notes or '' }}</textarea>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                    <button type="submit" class="btn btn-primary">保存</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增弹窗 -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('product_add') }}">
+                <div class="modal-header"><h5 class="modal-title">新增产品</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">名称 <span class="text-danger">*</span></label>
+                        <input name="name" class="form-control" required>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">单位</label>
+                            <select name="unit" class="form-select">
+                                {% for u in ['个','对','米','公斤','袋','条','根','盘','套'] %}
+                                <option value="{{ u }}">{{ u }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label">类型</label>
+                            <select name="product_type" class="form-select">
+                                <option value="成品">成品</option>
+                                <option value="半成品">半成品</option>
+                                <option value="原材料">原材料</option>
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label">分类</label>
+                            <select name="category_id" class="form-select">
+                                <option value="">-</option>
+                                {% for c in categories %}
+                                <option value="{{ c.id }}">{{ c.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <textarea name="notes" class="form-control" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

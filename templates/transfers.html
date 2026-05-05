@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block page_title %}转单记录{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header">新增转单</div>
+            <div class="card-body">
+                <form method="post" action="{{ url_for('transfer_add') }}">
+                    <div class="mb-3">
+                        <label class="form-label">转出加工户</label>
+                        <select name="from_processor_id" class="form-select" required>
+                            <option value="">请选择</option>
+                            {% for p in processors %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">转入加工户</label>
+                        <select name="to_processor_id" class="form-select" required>
+                            <option value="">请选择</option>
+                            {% for p in processors %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">产品</label>
+                        <select name="product_id" class="form-select">
+                            <option value="">请选择</option>
+                            {% for p in products %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">数量</label>
+                            <input name="quantity" class="form-control" type="number" step="0.01">
+                        </div>
+                        <div class="col">
+                            <label class="form-label">日期</label>
+                            <input name="transfer_date" class="form-control" type="date">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <input name="notes" class="form-control">
+                    </div>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>转单记录</span>
+                <form class="d-inline-block" method="get">
+                    <select name="processor_id" class="form-select form-select-sm d-inline-block w-auto"
+                            onchange="this.form.submit()">
+                        <option value="">全部加工户</option>
+                        {% for p in processors %}
+                        <option value="{{ p.id }}" {{ 'selected' if processor_id==p.id }}>{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead>
+                        <tr><th>日期</th><th>转出</th><th>→</th><th>转入</th><th>产品</th><th>数量</th><th>备注</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for t in transfers %}
+                        <tr>
+                            <td>{{ t.transfer_date or '-' }}</td>
+                            <td>{{ t.from_processor.name }}</td>
+                            <td>→</td>
+                            <td>{{ t.to_processor.name }}</td>
+                            <td>{{ t.product.name if t.product else '-' }}</td>
+                            <td>{{ '%.1f'|format(t.quantity) }}</td>
+                            <td class="text-muted">{{ t.notes or '' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="7" class="text-center text-muted py-4">暂无转单记录</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

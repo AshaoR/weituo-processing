@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block page_title %}导入结果{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <span>导入完成</span>
+        <a href="{{ url_for('index') }}" class="btn btn-outline-primary btn-sm">返回首页</a>
+    </div>
+    <div class="card-body">
+        <div class="row g-3 mb-3">
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <div class="number">{{ report.files|length }}</div>
+                    <div class="label">导入文件数</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <div class="number">{{ report.total_shipments }}</div>
+                    <div class="label">发货单数</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <div class="number">{{ report.total_receipts }}</div>
+                    <div class="label">收货单数</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <div class="number">{{ report.errors|length }}</div>
+                    <div class="label">错误数</div>
+                </div>
+            </div>
+        </div>
+
+        {% if report.errors %}
+        <div class="alert alert-danger">
+            <strong>导入错误</strong>
+            <ul class="mb-0">
+                {% for e in report.errors %}
+                <li>{{ e }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if anomalies %}
+<div class="card border-danger">
+    <div class="card-header text-danger fw-bold">
+        <i class="bi bi-exclamation-triangle"></i> 数据体检报告 — 发现 {{ anomalies|length }} 个异常
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr><th>类型</th><th>加工户</th><th>产品</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+                {% for a in anomalies %}
+                <tr class="table-danger">
+                    <td>
+                        {% if a.type == 'negative_balance' %}
+                        <span class="badge bg-danger">结存负数</span>
+                        {% elif a.type == 'receipt_no_shipment' %}
+                        <span class="badge bg-warning text-dark">有收无发</span>
+                        {% elif a.type == 'zero_price' %}
+                        <span class="badge bg-info text-dark">单价为零</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ a.processor }}</td>
+                    <td>{{ a.product }}</td>
+                    <td>{{ a.msg }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer text-muted small">
+        注意：负数结存说明收货数超过了发货数，可能是期初数据不完整或录入有误
+    </div>
+</div>
+{% else %}
+<div class="card border-success">
+    <div class="card-header text-success fw-bold">
+        <i class="bi bi-check-circle"></i> 数据体检通过，未发现异常
+    </div>
+</div>
+{% endif %}
+{% endblock %}

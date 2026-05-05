@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block page_title %}财务对账{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+    <div class="card-header">
+        <form class="row g-2" method="get">
+            <div class="col-auto">
+                <select name="processor_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="">全部加工户</option>
+                    {% for p in processors %}
+                    <option value="{{ p.id }}" {{ 'selected' if processor_id==p.id }}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if summary %}
+<div class="row g-3 mb-3">
+    {% for s in summary %}
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="number">{{ '%.2f'|format(s.total_amount or 0) }}</div>
+            <div class="label">{{ s.processor_name }} - {{ s.receipt_count }}笔收货</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

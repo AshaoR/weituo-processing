@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+# data/database.db 包含在仓库中以便部署
+.DS_Store
+env/
+venv/
+.vscode/

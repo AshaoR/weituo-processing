@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block page_title %}数据导入{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">从Excel导入历史数据</div>
+            <div class="card-body">
+                <p class="text-muted">将现有Excel工作簿中的数据导入到系统中。系统会自动识别加工户、产品和业务单据。</p>
+                <form method="post" action="{{ url_for('import_do') }}">
+                    <div class="mb-3">
+                        <label class="form-label">Excel文件目录路径</label>
+                        <input name="source_dir" class="form-control"
+                               placeholder="留空使用默认路径" value="">
+                        <div class="form-text">默认路径：上次解压目录</div>
+                    </div>
+                    <div class="alert alert-warning">
+                        <i class="bi bi-info-circle"></i>
+                        导入前请确保：
+                        <ul class="mb-0">
+                            <li>Excel文件格式为 .xlsx</li>
+                            <li>每张表包含"发货"和"接货"Sheet</li>
+                            <li>文件名为加工户名称</li>
+                        </ul>
+                    </div>
+                    <button type="submit" class="btn btn-primary" onclick="this.innerHTML='导入中...请稍候'">
+                        <i class="bi bi-upload"></i> 开始导入
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">使用说明</div>
+            <div class="card-body">
+                <ol class="mb-0">
+                    <li><strong>首次使用</strong>：先通过此页面导入现有Excel数据</li>
+                    <li>导入后系统会生成<strong>数据体检报告</strong>，标记异常数据</li>
+                    <li>异常数据可在对应模块中手动修正</li>
+                    <li>导入后可在 <a href="{{ url_for('inventory_report') }}">库存报表</a> 查看收发存汇总</li>
+                    <li>日常操作在 <a href="{{ url_for('shipment_list') }}">发货单</a> 和 <a href="{{ url_for('receipt_list') }}">收货单</a> 模块中进行</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

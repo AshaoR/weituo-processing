@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block page_title %}收货单管理{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            收货单列表
+            <form class="d-inline-block ms-3" method="get">
+                <input type="hidden" name="sort" value="{{ sort }}">
+                <select name="processor_id" class="form-select form-select-sm d-inline-block w-auto"
+                        onchange="this.form.submit()">
+                    <option value="">全部加工户</option>
+                    {% for p in processors %}
+                    <option value="{{ p.id }}" {{ 'selected' if processor_id==p.id }}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <a href="?sort={% if sort == 'desc' %}asc{% else %}desc{% endif %}{% if processor_id %}&processor_id={{ processor_id }}{% endif %}"
+               class="btn btn-outline-secondary btn-sm ms-1">
+                <i class="bi bi-arrow-{% if sort == 'desc' %}up{% else %}down{% endif %}"></i>
+                {% if sort == 'desc' %}最早在前{% else %}最晚在前{% endif %}
+            </a>
+        </span>
+        <a href="{{ url_for('receipt_add') }}" class="btn btn-primary btn-sm">
+            <i class="bi bi-plus"></i> 新增收货单
+        </a>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr><th>日期</th><th>加工户</th><th>产品明细</th><th>金额</th><th style="width:120px;">备注</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+                {% for g in receipts %}
+                <tr>
+                    <td class="fw-bold">{{ g.date }}</td>
+                    <td>{{ g.processor_name }}</td>
+                    <td>
+                        <ul class="list-unstyled mb-0" style="font-size:13px;">
+                            {% for p in g.products %}
+                            <li>
+                                {{ p.name }}
+                                {% if p.spec %}（{{ p.spec }}）{% endif %}
+                                × {{ p.quantity }}
+                                {% if p.unit_price %} × {{ '%.2f'|format(p.unit_price) }}{% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                    <td class="fw-bold text-primary">{{ '%.2f'|format(g.total_amount) }}</td>
+                    <td class="text-muted" style="font-size:12px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ g.notes }}</td>
+                    <td>
+                        <a href="{{ url_for('receipt_edit', id=g.ids[0]) }}" class="btn btn-outline-primary btn-sm">编辑</a>
+                        <form method="post" action="{{ url_for('receipt_delete', id=g.ids[0]) }}"
+                              style="display:inline" onsubmit="return confirm('删除此收货记录？')">
+                            <button class="btn btn-outline-danger btn-sm">删除</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">暂无收货单</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

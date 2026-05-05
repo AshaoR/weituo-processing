@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block page_title %}加工户管理{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>加工户列表</span>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+            <i class="bi bi-plus"></i> 新增加工户
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr><th>ID</th><th>名称</th><th>工序</th><th>电话</th><th>地址</th><th>备注</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+                {% for p in processors %}
+                <tr>
+                    <td>{{ p.id }}</td>
+                    <td class="fw-bold">{{ p.name }}</td>
+                    <td><span class="badge bg-info">{{ p.process_step or '-' }}</span></td>
+                    <td>{{ p.phone or '-' }}</td>
+                    <td>{{ p.address or '-' }}</td>
+                    <td class="text-muted">{{ p.notes[:20] if p.notes else '' }}</td>
+                    <td>
+                        <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal"
+                                data-bs-target="#editModal{{ p.id }}">编辑</button>
+                        <form method="post" action="{{ url_for('processor_delete', id=p.id) }}" style="display:inline"
+                              onsubmit="return confirm('确定删除加工户「{{ p.name }}」吗？')">
+                            <button class="btn btn-outline-danger btn-sm">删除</button>
+                        </form>
+                    </td>
+                </tr>
+                <!-- 编辑弹窗 -->
+                <div class="modal fade" id="editModal{{ p.id }}" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="post" action="{{ url_for('processor_edit', id=p.id) }}">
+                                <div class="modal-header"><h5 class="modal-title">编辑加工户</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">名称</label>
+                                        <input name="name" class="form-control" value="{{ p.name }}" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">工序</label>
+                                        <input name="process_step" class="form-control" value="{{ p.process_step or '' }}" placeholder="如：皮壳、服装、后道、充棉">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">电话</label>
+                                        <input name="phone" class="form-control" value="{{ p.phone or '' }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">地址</label>
+                                        <input name="address" class="form-control" value="{{ p.address or '' }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">备注</label>
+                                        <textarea name="notes" class="form-control" rows="2">{{ p.notes or '' }}</textarea>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                    <button type="submit" class="btn btn-primary">保存</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增弹窗 -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('processor_add') }}">
+                <div class="modal-header"><h5 class="modal-title">新增加工户</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">名称 <span class="text-danger">*</span></label>
+                        <input name="name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">工序</label>
+                        <input name="process_step" class="form-control" placeholder="如：皮壳、服装、后道、充棉">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">电话</label>
+                        <input name="phone" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">地址</label>
+                        <input name="address" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <textarea name="notes" class="form-control" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block page_title %}仪表盘{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="number">{{ stats.processors }}</div>
+            <div class="label">加工户</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="number">{{ stats.products }}</div>
+            <div class="label">产品/物料</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="number">{{ stats.shipments }}</div>
+            <div class="label">发货单</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="number">{{ stats.receipts }}</div>
+            <div class="label">收货单</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">最近发货</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr><th>日期</th><th>加工户</th><th>备注</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        {% for s in recent_shipments %}
+                        <tr>
+                            <td>{{ s.shipment_date }}</td>
+                            <td>{{ s.processor.name }}</td>
+                            <td class="text-muted">{{ s.notes[:20] if s.notes else '' }}</td>
+                            <td><a href="{{ url_for('shipment_view', id=s.id) }}" class="btn btn-outline-primary btn-sm">查看</a></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">暂无数据</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">最近收货</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr><th>日期</th><th>加工户</th><th>金额</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        {% for r in recent_receipts %}
+                        <tr>
+                            <td>{{ r.receipt_date }}</td>
+                            <td>{{ r.processor.name }}</td>
+                            <td>{{ '%.2f'|format(r.total_amount or 0) }}</td>
+                            <td><a href="{{ url_for('receipt_view', id=r.id) }}" class="btn btn-outline-primary btn-sm">查看</a></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">暂无数据</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if anomalies %}
+<div class="card mt-3 border-danger">
+    <div class="card-header text-danger">
+        <i class="bi bi-exclamation-triangle"></i> 数据异常预警（结存为负数）
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr><th>加工户</th><th>产品</th><th>期初</th><th>发货</th><th>收货</th><th>结存</th></tr>
+            </thead>
+            <tbody>
+                {% for a in anomalies %}
+                <tr class="table-danger">
+                    <td>{{ a.processor_name }}</td>
+                    <td>{{ a.product_name }}</td>
+                    <td>{{ '%.1f'|format(a.begin_qty) }}</td>
+                    <td>{{ '%.1f'|format(a.ship_qty) }}</td>
+                    <td>{{ '%.1f'|format(a.receipt_qty) }}</td>
+                    <td class="fw-bold text-danger">{{ '%.1f'|format(a.balance) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

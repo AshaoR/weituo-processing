@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block page_title %}收货单详情 #{{ receipt.id }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between">
+        <span>收货单 #{{ receipt.id }}</span>
+        <a href="{{ url_for('receipt_list') }}" class="btn btn-outline-secondary btn-sm">返回</a>
+    </div>
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-3"><strong>加工户：</strong>{{ receipt.processor.name }}</div>
+            <div class="col-md-3"><strong>收货日期：</strong>{{ receipt.receipt_date }}</div>
+            <div class="col-md-3"><strong>总金额：</strong><span class="fw-bold text-primary">{{ '%.2f'|format(receipt.total_amount or 0) }}</span></div>
+            <div class="col-md-3"><strong>备注：</strong>{{ receipt.notes or '-' }}</div>
+        </div>
+        <table class="table table-bordered">
+            <thead>
+                <tr><th>#</th><th>成品名称</th><th>数量</th><th>单价</th><th>金额</th><th>规格</th><th>备注</th></tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ item.product.name }}</td>
+                    <td>{{ '%.2f'|format(item.quantity) }} {{ item.product.unit or '个' }}</td>
+                    <td>{{ '%.2f'|format(item.unit_price) }}</td>
+                    <td>{{ '%.2f'|format(item.amount) }}</td>
+                    <td>{{ item.spec or '-' }}</td>
+                    <td>{{ item.notes or '' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted">无明细</td></tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr class="fw-bold">
+                    <td colspan="4" class="text-end">合计</td>
+                    <td>{{ '%.2f'|format(receipt.total_amount or 0) }}</td>
+                    <td colspan="2"></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% endblock %}

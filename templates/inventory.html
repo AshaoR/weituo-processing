@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block page_title %}库存报表 - 收发存汇总{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <form class="row g-2 align-items-center" method="get">
+            <div class="col-auto">
+                <select name="processor_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="">全部加工户</option>
+                    {% for p in processors %}
+                    <option value="{{ p.id }}" {{ 'selected' if processor_id==p.id }}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <select name="product_type" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="">全部类型</option>
+                    <option value="成品" {{ 'selected' if product_type=='成品' }}>成品</option>
+                    <option value="半成品" {{ 'selected' if product_type=='半成品' }}>半成品</option>
+                    <option value="原材料" {{ 'selected' if product_type=='原材料' }}>原材料</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="anomaly_only" value="1"
+                           id="anomalyOnly" {{ 'checked' if anomaly_only }}
+                           onchange="this.form.submit()">
+                    <label class="form-check-label" for="anomalyOnly">仅显示异常</label>
+                </div>
+            </div>
+            <div class="col-auto">
+                <a href="{{ url_for('inventory_report') }}" class="btn btn-outline-secondary btn-sm">重置</a>
+            </div>
+        </form>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0" id="invTable">
+            <thead>
+                <tr>
+                    <th>加工户</th>
+                    <th>产品</th>
+                    <th>单位</th>
+                    <th>类型</th>
+                    <th class="text-end">期初</th>
+                    <th class="text-end">发货</th>
+                    <th class="text-end">收货</th>
+                    <th class="text-end">结存</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set ns = namespace(prev_processor='') %}
+                {% for row in inventory %}
+                <tr class="{{ 'table-danger' if row.balance < -0.01 else '' }}">
+                    <td>{{ row.processor_name if row.processor_name != ns.prev_processor else '' }}
+                        {% set ns.prev_processor = row.processor_name %}</td>
+                    <td>{{ row.product_name }}</td>
+                    <td>{{ row.unit or '个' }}</td>
+                    <td><span class="badge bg-{{ 'primary' if row.product_type=='成品' else 'info' if row.product_type=='半成品' else 'secondary' }}">{{ row.product_type }}</span></td>
+                    <td class="text-end text-muted">{{ '%.1f'|format(row.begin_qty) if row.begin_qty else '0.0' }}</td>
+                    <td class="text-end">{{ '%.1f'|format(row.ship_qty) if row.ship_qty else '0.0' }}</td>
+                    <td class="text-end">{{ '%.1f'|format(row.receipt_qty) if row.receipt_qty else '0.0' }}</td>
+                    <td class="text-end fw-bold {{ 'text-danger' if row.balance < -0.01 else 'text-success' if row.balance > 0 else '' }}">
+                        {{ '%.1f'|format(row.balance) }}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">暂无数据</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if inventory %}
+    <div class="card-footer text-muted small">
+        共 {{ inventory|length }} 条记录 | 结存为红色表示异常（负数）
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

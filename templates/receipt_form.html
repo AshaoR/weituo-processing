@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block page_title %}{{ '编辑收货单' if receipt else '新增收货单' }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">{{ '编辑' if receipt else '新增' }}收货单</div>
+    <div class="card-body">
+        <form method="post" id="receiptForm">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">加工户 <span class="text-danger">*</span></label>
+                    <select name="processor_id" class="form-select" required id="processorSelect">
+                        <option value="">请选择</option>
+                        {% for p in processors %}
+                        <option value="{{ p.id }}" {{ 'selected' if receipt and receipt.processor_id==p.id }}>{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">收货日期 <span class="text-danger">*</span></label>
+                    <input name="receipt_date" type="date" class="form-control"
+                           value="{{ receipt.receipt_date if receipt else '' }}" required>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label">备注</label>
+                    <input name="notes" class="form-control" value="{{ receipt.notes if receipt else '' }}">
+                </div>
+            </div>
+
+            <h6 class="fw-bold mb-2">收货明细</h6>
+            <table class="table table-bordered" id="itemsTable">
+                <thead>
+                    <tr>
+                        <th style="width:25%">成品名称</th>
+                        <th style="width:12%">数量</th>
+                        <th style="width:12%">单价</th>
+                        <th style="width:12%">金额</th>
+                        <th style="width:15%">颜色/规格</th>
+                        <th style="width:14%">备注</th>
+                        <th style="width:10%">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="itemsBody">
+                    {% if edit_items %}
+                    {% for item in edit_items %}
+                    <tr class="item-row">
+                        <td>
+                            <select name="product_id[]" class="form-select form-select-sm product-select">
+                                <option value="">请选择</option>
+                                {% for p in products %}
+                                <option value="{{ p.id }}" {{ 'selected' if item.product_id==p.id }}>{{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td><input name="quantity[]" class="form-control form-control-sm qty" type="number" step="0.01" value="{{ item.quantity }}" oninput="calcAmount(this)"></td>
+                        <td><input name="unit_price[]" class="form-control form-control-sm price" type="number" step="0.01" value="{{ item.unit_price }}" oninput="calcAmount(this)"></td>
+                        <td><input name="amount[]" class="form-control form-control-sm amount" type="number" step="0.01" value="{{ item.amount }}" readonly style="background:#eee;"></td>
+                        <td><input name="spec[]" class="form-control form-control-sm" placeholder="颜色/规格" value="{{ item.spec or '' }}"></td>
+                        <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="备注" value="{{ item.notes or '' }}"></td>
+                        <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr class="item-row">
+                        <td>
+                            <select name="product_id[]" class="form-select form-select-sm product-select" disabled>
+                                <option value="">请先选择加工户</option>
+                            </select>
+                        </td>
+                        <td><input name="quantity[]" class="form-control form-control-sm qty" type="number" step="0.01" oninput="calcAmount(this)"></td>
+                        <td><input name="unit_price[]" class="form-control form-control-sm price" type="number" step="0.01" oninput="calcAmount(this)"></td>
+                        <td><input name="amount[]" class="form-control form-control-sm amount" type="number" step="0.01" readonly style="background:#eee;"></td>
+                        <td><input name="spec[]" class="form-control form-control-sm" placeholder="颜色/规格"></td>
+                        <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="备注"></td>
+                        <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+            <button type="button" class="btn btn-outline-success btn-sm mb-3" onclick="addRow()">
+                <i class="bi bi-plus"></i> 添加一行
+            </button>
+            <br>
+            <button type="submit" class="btn btn-primary">{{ '保存修改' if receipt else '保存收货单' }}</button>
+            <a href="{{ url_for('receipt_list') }}" class="btn btn-secondary">取消</a>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let cachedProducts = {};
+
+document.getElementById('processorSelect').addEventListener('change', function() {
+    const pid = this.value;
+    updateProductOptions(pid);
+});
+
+function updateProductOptions(pid) {
+    if (!pid) {
+        document.querySelectorAll('.product-select').forEach(sel => {
+            sel.innerHTML = '<option value="">请先选择加工户</option>';
+            sel.disabled = true;
+        });
+        return;
+    }
+    if (cachedProducts[pid]) {
+        setProductOptions(cachedProducts[pid]);
+        return;
+    }
+    fetch('/api/processor/' + pid + '/products')
+        .then(r => r.json())
+        .then(data => {
+            cachedProducts[pid] = data;
+            setProductOptions(data);
+        });
+}
+
+function setProductOptions(products) {
+    let html = '<option value="">请选择</option>';
+    products.forEach(p => {
+        html += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+    });
+    document.querySelectorAll('.product-select').forEach(sel => {
+        const val = sel.value;
+        sel.innerHTML = html;
+        sel.value = val;
+        sel.disabled = false;
+    });
+}
+
+function addRow() {
+    const tbody = document.getElementById('itemsBody');
+    const pid = document.getElementById('processorSelect').value;
+    let optionsHtml = '<option value="">请先选择加工户</option>';
+    if (pid && cachedProducts[pid]) {
+        optionsHtml = '<option value="">请选择</option>';
+        cachedProducts[pid].forEach(p => {
+            optionsHtml += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+        });
+    }
+    const tr = document.createElement('tr');
+    tr.className = 'item-row';
+    tr.innerHTML = `<td><select name="product_id[]" class="form-select form-select-sm product-select" ${pid ? '' : 'disabled'}>${optionsHtml}</select></td>
+        <td><input name="quantity[]" class="form-control form-control-sm qty" type="number" step="0.01" oninput="calcAmount(this)"></td>
+        <td><input name="unit_price[]" class="form-control form-control-sm price" type="number" step="0.01" oninput="calcAmount(this)"></td>
+        <td><input name="amount[]" class="form-control form-control-sm amount" type="number" step="0.01" readonly style="background:#eee;"></td>
+        <td><input name="spec[]" class="form-control form-control-sm" placeholder="颜色/规格"></td>
+        <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="备注"></td>
+        <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>`;
+    tbody.appendChild(tr);
+}
+
+function removeRow(btn) {
+    const rows = document.querySelectorAll('.item-row');
+    if (rows.length <= 1) return;
+    btn.closest('tr').remove();
+}
+
+function calcAmount(el) {
+    const row = el.closest('tr');
+    const qty = parseFloat(row.querySelector('.qty').value) || 0;
+    const price = parseFloat(row.querySelector('.price').value) || 0;
+    row.querySelector('.amount').value = (qty * price).toFixed(2);
+}
+
+// 编辑模式：加载时自动加载加工户的产品
+{% if receipt %}
+(function() {
+    const pid = document.getElementById('processorSelect').value;
+    if (pid) {
+        updateProductOptions(pid);
+    }
+})();
+{% endif %}
+</script>
+{% endblock %}

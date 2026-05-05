@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}委托加工管理系统{% endblock %}</title>
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background: #f4f6f9; font-size: 14px; }
+        .sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0; width: 220px;
+            background: #1e293b; color: #fff; padding-top: 60px; z-index: 100;
+        }
+        .sidebar .nav-link {
+            color: #94a3b8; padding: 10px 20px; border-radius: 0;
+            transition: all 0.2s;
+        }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active {
+            color: #fff; background: #334155;
+        }
+        .sidebar .nav-link i { margin-right: 8px; width: 20px; text-align: center; }
+        .main-content { margin-left: 220px; padding: 20px; padding-top: 80px; }
+        .navbar-top {
+            position: fixed; top: 0; left: 220px; right: 0; height: 50px;
+            background: #fff; border-bottom: 1px solid #e2e8f0;
+            display: flex; align-items: center; padding: 0 20px; z-index: 99;
+        }
+        .card { border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px; }
+        .card-header {
+            background: #fff; border-bottom: 1px solid #e2e8f0;
+            font-weight: 600; padding: 12px 20px;
+        }
+        .stat-card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center;
+        }
+        .stat-card .number { font-size: 28px; font-weight: 700; color: #0d6efd; }
+        .stat-card .label { font-size: 13px; color: #64748b; margin-top: 4px; }
+        .table th { background: #f8fafc; font-weight: 600; font-size: 13px; white-space: nowrap; }
+        .table td { vertical-align: middle; }
+        .badge-anomaly { background: #fee2e2; color: #dc2626; }
+        .page-title { margin-bottom: 16px; font-size: 20px; font-weight: 600; }
+        .btn-sm { font-size: 12px; }
+        .form-label { font-weight: 500; font-size: 13px; }
+        .toast-container { position: fixed; top: 60px; right: 20px; z-index: 9999; }
+        @media (max-width: 768px) {
+            .sidebar { width: 60px; }
+            .sidebar .nav-link span { display: none; }
+            .main-content { margin-left: 60px; }
+            .navbar-top { left: 60px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 侧边栏 -->
+<div class="sidebar">
+    <div class="text-center mb-3 px-3">
+        <span style="font-size:16px; font-weight:600; color:#fff;">📦 委托加工</span>
+    </div>
+    <nav class="nav flex-column">
+        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="{{ url_for('index') }}">
+            <i class="bi bi-speedometer2"></i><span>仪表盘</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/processors') %}active{% endif %}" href="{{ url_for('processor_list') }}">
+            <i class="bi bi-people"></i><span>加工户</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/products') or request.path.startswith('/prices') %}active{% endif %}" href="{{ url_for('price_list') }}">
+            <i class="bi bi-box-seam"></i><span>产品与单价</span>
+        </a>
+        <hr style="border-color:#334155; margin:8px 16px;">
+        <a class="nav-link {% if request.path.startswith('/shipments') %}active{% endif %}" href="{{ url_for('shipment_list') }}">
+            <i class="bi bi-box-arrow-up"></i><span>发货单</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/receipts') %}active{% endif %}" href="{{ url_for('receipt_list') }}">
+            <i class="bi bi-box-arrow-down"></i><span>收货单</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/transfers') %}active{% endif %}" href="{{ url_for('transfer_list') }}">
+            <i class="bi bi-arrow-left-right"></i><span>转单记录</span>
+        </a>
+        <hr style="border-color:#334155; margin:8px 16px;">
+        <a class="nav-link {% if request.path.startswith('/inventory') %}active{% endif %}" href="{{ url_for('inventory_report') }}">
+            <i class="bi bi-table"></i><span>库存报表</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/finance') %}active{% endif %}" href="{{ url_for('finance') }}">
+            <i class="bi bi-calculator"></i><span>财务对账</span>
+        </a>
+        <hr style="border-color:#334155; margin:8px 16px;">
+        <a class="nav-link {% if request.path.startswith('/import') %}active{% endif %}" href="{{ url_for('import_page') }}">
+            <i class="bi bi-upload"></i><span>数据导入</span>
+        </a>
+    </nav>
+</div>
+
+<!-- 顶部 -->
+<div class="navbar-top">
+    <span style="font-size:15px; font-weight:500;" id="pageTitle">{% block page_title %}仪表盘{% endblock %}</span>
+    <div class="ms-auto text-muted small">{{ now() }}</div>
+</div>
+
+<!-- 主内容 -->
+<div class="main-content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="toast-container">
+        {% for category, message in messages %}
+        <div class="toast show align-items-center text-white bg-{{ 'danger' if category == 'danger' else 'success' if category == 'success' else 'warning' if category == 'warning' else 'info' }} border-0" role="alert">
+            <div class="d-flex">
+                <div class="toast-body">{{ message }}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</div>
+
+<script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 自动隐藏toast
+    document.querySelectorAll('.toast').forEach(t => {
+        setTimeout(() => { t.remove(); }, 4000);
+    });
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

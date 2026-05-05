@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block page_title %}发货单详情 #{{ shipment.id }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between">
+        <span>发货单 #{{ shipment.id }}</span>
+        <div>
+            <a href="{{ url_for('shipment_list') }}" class="btn btn-outline-secondary btn-sm">返回</a>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-3"><strong>加工户：</strong>{{ shipment.processor.name }}</div>
+            <div class="col-md-3"><strong>发货日期：</strong>{{ shipment.shipment_date }}</div>
+            <div class="col-md-6"><strong>备注：</strong>{{ shipment.notes or '-' }}</div>
+        </div>
+        <table class="table table-bordered">
+            <thead>
+                <tr><th>#</th><th>产品/物料</th><th>数量</th><th>规格/颜色</th><th>备注</th></tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ item.product.name }}</td>
+                    <td>{{ '%.2f'|format(item.quantity) }} {{ item.product.unit or '个' }}</td>
+                    <td>{{ item.spec or '-' }}</td>
+                    <td>{{ item.notes or '' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted">无明细</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
