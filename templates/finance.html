@@ -17,16 +17,72 @@
     </div>
 </div>
 
+{% if summary or transfer_fees %}
+<div class="card">
+    <div class="card-header fw-bold">加工户财务汇总</div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>加工户</th>
+                    <th class="text-end">收货笔数</th>
+                    <th class="text-end">收货金额</th>
+                    <th class="text-end">转单笔数</th>
+                    <th class="text-end">转单加工费</th>
+                    <th class="text-end">合计</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set fee_dict = {} %}
+                {% for tf in transfer_fees %}
+                {% set _ = fee_dict.update({tf.id: {'count': tf.transfer_count, 'total': tf.total_fee}}) %}
+                {% endfor %}
+
+                {% set ns = namespace(has_data=false) %}
+                {% for p in processors %}
+                {% set row_receipt = summary|selectattr('processor_id', 'equalto', p.id)|first %}
+                {% set row_fee = fee_dict.get(p.id, {'count': 0, 'total': 0}) %}
+                {% set receipt_count = row_receipt.receipt_count if row_receipt else 0 %}
+                {% set receipt_total = row_receipt.total_amount if row_receipt else 0 %}
+                {% set transfer_count = row_fee.count %}
+                {% set fee_total = row_fee.total %}
+                {% set grand_total = (receipt_total or 0) + (fee_total or 0) %}
+
+                {% if receipt_count > 0 or transfer_count > 0 %}
+                {% set ns.has_data = true %}
+                <tr>
+                    <td class="fw-bold">{{ p.name }}</td>
+                    <td class="text-end">{{ receipt_count }}</td>
+                    <td class="text-end">{{ '%.2f'|format(receipt_total or 0) }}</td>
+                    <td class="text-end">{{ transfer_count }}</td>
+                    <td class="text-end text-primary">{{ '%.2f'|format(fee_total or 0) }}</td>
+                    <td class="text-end fw-bold">{{ '%.2f'|format(grand_total) }}</td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+
+                {% if not ns.has_data %}
+                <tr><td colspan="6" class="text-center text-muted py-4">暂无数据</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 {% if summary %}
-<div class="row g-3 mb-3">
+<div class="row g-3 mt-3">
     {% for s in summary %}
+    {% set fee = transfer_fees|selectattr('id', 'equalto', s.processor_id)|first %}
+    {% set fee_total = fee.total_fee if fee else 0 %}
     <div class="col-md-3">
         <div class="stat-card">
-            <div class="number">{{ '%.2f'|format(s.total_amount or 0) }}</div>
-            <div class="label">{{ s.processor_name }} - {{ s.receipt_count }}笔收货</div>
+            <div class="number">{{ '%.2f'|format((s.total_amount or 0) + fee_total) }}</div>
+            <div class="label">{{ s.processor_name }}</div>
+            <small class="text-muted">收货 {{ '%.2f'|format(s.total_amount or 0) }} + 加工费 {{ '%.2f'|format(fee_total) }}</small>
         </div>
     </div>
     {% endfor %}
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}

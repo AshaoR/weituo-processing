@@ -19,7 +19,7 @@
                 <div class="col-md-3">
                     <label class="form-label">发货日期 <span class="text-danger">*</span></label>
                     <input name="shipment_date" type="date" class="form-control"
-                           value="{{ shipment.shipment_date if shipment else '' }}" required>
+                           value="{{ shipment.shipment_date if shipment else today() }}" required>
                 </div>
                 <div class="col-md-5">
                     <label class="form-label">备注</label>
@@ -46,7 +46,7 @@
                             <select name="product_id[]" class="form-select form-select-sm product-select">
                                 <option value="">请选择</option>
                                 {% for p in products %}
-                                <option value="{{ p.id }}" {{ 'selected' if item.product_id==p.id }}>{{ p.name }}（{{ p.product_type }}）</option>
+                                <option value="{{ p.id }}" {{ 'selected' if item.product_id==p.id }}>{{ p.name }}</option>
                                 {% endfor %}
                             </select>
                         </td>
@@ -96,6 +96,7 @@ function updateProductOptions(pid) {
         document.querySelectorAll('.product-select').forEach(sel => {
             sel.innerHTML = '<option value="">请先选择加工户</option>';
             sel.disabled = true;
+            refreshAutocomplete(sel);
         });
         return;
     }
@@ -114,13 +115,14 @@ function updateProductOptions(pid) {
 function setProductOptions(products) {
     let html = '<option value="">请选择</option>';
     products.forEach(p => {
-        html += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+        html += `<option value="${p.id}">${p.name}</option>`;
     });
     document.querySelectorAll('.product-select').forEach(sel => {
         const val = sel.value;
         sel.innerHTML = html;
         sel.value = val;
         sel.disabled = false;
+        refreshAutocomplete(sel);
     });
 }
 
@@ -131,7 +133,7 @@ function addRow() {
     if (pid && cachedProducts[pid]) {
         optionsHtml = '<option value="">请选择</option>';
         cachedProducts[pid].forEach(p => {
-            optionsHtml += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+            optionsHtml += `<option value="${p.id}">${p.name}</option>`;
         });
     }
     const tr = document.createElement('tr');
@@ -143,6 +145,7 @@ function addRow() {
         <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="备注"></td>
         <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>`;
     tbody.appendChild(tr);
+    initAutocomplete(tr.querySelector('.product-select'));
 }
 
 function removeRow(btn) {
@@ -152,6 +155,11 @@ function removeRow(btn) {
 }
 
 // 编辑模式：加载时自动加载加工户的产品
+// 初始化自动补全（产品下拉支持输入搜索）
+(function() {
+    document.querySelectorAll('.product-select').forEach(initAutocomplete);
+})();
+
 {% if shipment %}
 (function() {
     const pid = document.getElementById('processorSelect').value;

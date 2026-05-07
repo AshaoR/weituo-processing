@@ -44,6 +44,13 @@
         .btn-sm { font-size: 12px; }
         .form-label { font-weight: 500; font-size: 13px; }
         .toast-container { position: fixed; top: 60px; right: 20px; z-index: 9999; }
+        /* 自动补全 */
+        .autocomplete-wrap { position: relative; }
+        .autocomplete-wrap input { cursor: pointer; }
+        .autocomplete-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 4px; display: none; }
+        .autocomplete-dropdown div { padding: 4px 8px; cursor: pointer; font-size: 13px; }
+        .autocomplete-dropdown div:hover { background: #f0f0f0; }
+        .autocomplete-dropdown .highlighted { background: #e8f0fe !important; font-weight: 500; }
         @media (max-width: 768px) {
             .sidebar { width: 60px; }
             .sidebar .nav-link span { display: none; }
@@ -80,11 +87,17 @@
             <i class="bi bi-arrow-left-right"></i><span>转单记录</span>
         </a>
         <hr style="border-color:#334155; margin:8px 16px;">
+        <a class="nav-link {% if request.path.startswith('/begin_inventory') %}active{% endif %}" href="{{ url_for('begin_inventory_list') }}">
+            <i class="bi bi-pencil-square"></i><span>期初库存</span>
+        </a>
         <a class="nav-link {% if request.path.startswith('/inventory') %}active{% endif %}" href="{{ url_for('inventory_report') }}">
             <i class="bi bi-table"></i><span>库存报表</span>
         </a>
         <a class="nav-link {% if request.path.startswith('/finance') %}active{% endif %}" href="{{ url_for('finance') }}">
             <i class="bi bi-calculator"></i><span>财务对账</span>
+        </a>
+        <a class="nav-link {% if request.path.startswith('/closing') %}active{% endif %}" href="{{ url_for('closing_page') }}">
+            <i class="bi bi-lock"></i><span>结账管理</span>
         </a>
         <hr style="border-color:#334155; margin:8px 16px;">
         <a class="nav-link {% if request.path.startswith('/import') %}active{% endif %}" href="{{ url_for('import_page') }}">
@@ -125,6 +138,128 @@
     document.querySelectorAll('.toast').forEach(t => {
         setTimeout(() => { t.remove(); }, 4000);
     });
+
+    // ---- 自动补全：select 增强为可输入过滤 ----
+    function initAutocomplete(selectEl, onSelectCb) {
+        if (!selectEl || selectEl.dataset.acReady) return;
+        selectEl.dataset.acReady = '1';
+
+        const wrap = document.createElement('div');
+        wrap.className = 'autocomplete-wrap';
+        selectEl.parentNode.insertBefore(wrap, selectEl);
+        wrap.appendChild(selectEl);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control form-control-sm';
+        input.placeholder = selectEl.disabled ? '请先选择加工户' : '输入搜索...';
+        input.autocomplete = 'off';
+        wrap.appendChild(input);
+
+        const dropdown = document.createElement('div');
+        dropdown.className = 'autocomplete-dropdown';
+        wrap.appendChild(dropdown);
+
+        selectEl.style.display = 'none';
+
+        function getOptions() {
+            return Array.from(selectEl.options)
+                .filter(opt => opt.value)
+                .map(opt => ({ value: opt.value, text: opt.text }));
+        }
+
+        function doFilter(text) {
+            const allOptions = getOptions();
+            if (allOptions.length === 0) { dropdown.style.display = 'none'; return; }
+            let filtered = allOptions;
+            if (text) {
+                const lower = text.toLowerCase();
+                filtered = allOptions.filter(o => o.text.toLowerCase().includes(lower));
+            }
+            if (filtered.length === 0) { dropdown.style.display = 'none'; return; }
+            dropdown.innerHTML = '';
+            filtered.forEach(opt => {
+                const div = document.createElement('div');
+                div.textContent = opt.text;
+                div.dataset.value = opt.value;
+                div.onclick = () => selectValue(opt.value, opt.text);
+                dropdown.appendChild(div);
+            });
+            dropdown.style.display = 'block';
+        }
+
+        function selectValue(val, text) {
+            selectEl.value = val;
+            input.value = text;
+            dropdown.style.display = 'none';
+            if (typeof onSelectCb === 'function') onSelectCb(val, text);
+            selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        input.oninput = () => doFilter(input.value);
+        input.onfocus = () => doFilter(input.value);
+        input.onblur = () => setTimeout(() => { dropdown.style.display = 'none'; }, 200);
+
+        input.onkeydown = e => {
+            const items = dropdown.querySelectorAll('[data-value]');
+            let idx = -1;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].classList.contains('highlighted')) { idx = i; break; }
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                const next = Math.min(idx + 1, items.length - 1);
+                if (next >= 0 && items[next]) {
+                    items.forEach(i => i.classList.remove('highlighted'));
+                    items[next].classList.add('highlighted');
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                const prev = Math.max(idx - 1, 0);
+                if (prev >= 0 && items[prev]) {
+                    items.forEach(i => i.classList.remove('highlighted'));
+                    items[prev].classList.add('highlighted');
+                }
+            } else if (e.key === 'Enter' && idx >= 0 && items[idx]) {
+                e.preventDefault();
+                selectValue(items[idx].dataset.value, items[idx].textContent);
+            } else if (e.key === 'Escape') {
+                dropdown.style.display = 'none';
+            }
+        };
+
+        // 初始显示值
+        const selOpt = selectEl.options[selectEl.selectedIndex];
+        if (selOpt && selOpt.value) input.value = selOpt.text;
+        input.disabled = selectEl.disabled;
+
+        // select disabled 状态变化时同步 input
+        const origDisabled = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'disabled');
+        if (origDisabled && origDisabled.configurable) {
+            Object.defineProperty(selectEl, 'disabled', {
+                get() { return origDisabled.get.call(this); },
+                set(v) {
+                    origDisabled.set.call(this, v);
+                    input.disabled = v;
+                    input.placeholder = v ? '请先选择加工户' : '输入搜索...';
+                }
+            });
+        }
+
+        return input;
+    }
+
+    function refreshAutocomplete(selectEl) {
+        if (!selectEl || !selectEl.dataset.acReady) return;
+        const wrap = selectEl.closest('.autocomplete-wrap');
+        if (!wrap) return;
+        const input = wrap.querySelector('input[type="text"]');
+        if (!input) return;
+        const selOpt = selectEl.options[selectEl.selectedIndex];
+        input.value = (selOpt && selOpt.value) ? selOpt.text : '';
+        input.disabled = selectEl.disabled;
+        input.placeholder = selectEl.disabled ? '请先选择加工户' : '输入搜索...';
+    }
 </script>
 {% block scripts %}{% endblock %}
 </body>

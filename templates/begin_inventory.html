@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block page_title %}期初库存管理{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            期初库存
+            <form class="d-inline-block ms-3" method="get">
+                <select name="processor_id" class="form-select form-select-sm d-inline-block w-auto"
+                        onchange="this.form.submit()">
+                    <option value="">全部加工户</option>
+                    {% for p in processors %}
+                    <option value="{{ p.id }}" {{ 'selected' if processor_id==p.id }}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="period" class="form-select form-select-sm d-inline-block w-auto ms-2"
+                        onchange="this.form.submit()">
+                    <option value="">全部账期</option>
+                    {% for ap in available_periods %}
+                    <option value="{{ ap }}" {{ 'selected' if current_period==ap }}>{{ ap }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </span>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+            <i class="bi bi-plus"></i> 新增期初库存
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr><th>#</th><th>加工户</th><th>产品</th><th>数量</th><th>所属期</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+                {% for r in records %}
+                <tr>
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td>{{ r.processor.name if r.processor else '-' }}</td>
+                    <td class="product-name-cell" data-prodid="{{ r.product.id if r.product else '' }}" style="cursor:pointer">
+                        <span class="product-name-text">{{ r.product.name if r.product else '-' }}</span>
+                    </td>
+                    <td>
+                        <span class="qty-text fw-bold">{{ r.quantity }}</span>
+                        <input type="number" step="0.01" class="form-control form-control-sm qty-input d-none"
+                               value="{{ r.quantity }}" style="width:120px;display:inline-block;">
+                    </td>
+                    <td>{{ r.period }}</td>
+                    <td>
+                        <button class="btn btn-outline-primary btn-sm btn-edit">编辑</button>
+                        <button class="btn btn-outline-success btn-sm btn-save d-none">保存</button>
+                        <form method="post" action="{{ url_for('begin_inventory_delete', id=r.id) }}"
+                              style="display:inline" onsubmit="return confirm('删除此条期初库存？')">
+                            <button class="btn btn-outline-danger btn-sm">删除</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">暂无期初库存记录</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增模态框 -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('begin_inventory_add') }}">
+                <div class="modal-header">
+                    <h5 class="modal-title">新增期初库存</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">加工户 <span class="text-danger">*</span></label>
+                        <select name="processor_id" class="form-select" required>
+                            <option value="">请选择</option>
+                            {% for p in processors %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">产品 <span class="text-danger">*</span></label>
+                        <select name="product_id" class="form-select" required>
+                            <option value="">请选择</option>
+                            {% for prod in all_products %}
+                            <option value="{{ prod.id }}">{{ prod.name }}（{{ prod.unit or "个" }}）</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">数量</label>
+                        <input name="quantity" class="form-control" type="number" step="0.01" value="0">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">所属期</label>
+                        <input name="period" class="form-control" value="2026-02-28">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 初始化自动补全
+(function() {
+    var m = document.getElementById('addModal');
+    if (m) {
+        initAutocomplete(m.querySelector('select[name="processor_id"]'));
+        initAutocomplete(m.querySelector('select[name="product_id"]'));
+    }
+})();
+
+// 产品名称内联编辑
+document.querySelectorAll('.product-name-cell').forEach(function(cell) {
+    var span = cell.querySelector('.product-name-text');
+    var prodId = cell.dataset.prodid;
+    if (!prodId) return;
+
+    cell.addEventListener('click', function() {
+        if (this.querySelector('input')) return;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control form-control-sm';
+        input.value = span.textContent.trim();
+        input.style.width = '100%';
+        span.style.display = 'none';
+        cell.insertBefore(input, span);
+        input.focus();
+        input.select();
+
+        function cancelEdit() {
+            input.remove();
+            span.style.display = '';
+        }
+
+        function saveEdit() {
+            var newName = input.value.trim();
+            if (!newName || newName === span.textContent.trim()) {
+                cancelEdit();
+                return;
+            }
+            input.disabled = true;
+            fetch('/api/products/' + prodId + '/rename', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: newName})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    span.textContent = d.name;
+                    cell.dataset.name = d.name;
+                } else {
+                    alert(d.msg || '修改失败');
+                }
+                cancelEdit();
+            })
+            .catch(function() { alert('保存失败'); cancelEdit(); });
+        }
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveEdit(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+        });
+        input.addEventListener('blur', saveEdit);
+    });
+});
+
+
+// 行内编辑数量
+document.querySelectorAll('.btn-edit').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const row = this.closest('tr');
+        const textSpan = row.querySelector('.qty-text');
+        const input = row.querySelector('.qty-input');
+        const saveBtn = row.querySelector('.btn-save');
+        textSpan.classList.add('d-none');
+        input.classList.remove('d-none');
+        this.classList.add('d-none');
+        saveBtn.classList.remove('d-none');
+        input.focus();
+    });
+});
+
+document.querySelectorAll('.btn-save').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const row = this.closest('tr');
+        const input = row.querySelector('.qty-input');
+        const textSpan = row.querySelector('.qty-text');
+        const editBtn = row.querySelector('.btn-edit');
+        const newQty = input.value;
+
+        // 通过 fetch 保存，用原有行中的删除表单 action 推断
+        const deleteForm = row.querySelector('form');
+        const action = deleteForm ? deleteForm.action : '';
+        const idMatch = action.match(/\/delete\/(\d+)/);
+        if (!idMatch) return;
+        const id = idMatch[1];
+
+        this.disabled = true;
+        this.textContent = '保存中...';
+
+        // 构造一个简单的 POST 提交
+        const formData = new FormData();
+        formData.append('quantity', newQty);
+
+        fetch('/begin_inventory/edit/' + id, { method: 'POST', body: formData })
+            .then(r => {
+                if (r.redirected || r.ok) {
+                    textSpan.textContent = newQty;
+                    textSpan.classList.remove('d-none');
+                    input.classList.add('d-none');
+                    this.classList.add('d-none');
+                    editBtn.classList.remove('d-none');
+                    location.reload();
+                }
+            })
+            .catch(() => {
+                this.disabled = false;
+                this.textContent = '保存';
+            });
+    });
+});
+</script>
+{% endblock %}

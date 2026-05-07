@@ -5,51 +5,66 @@
 <div class="row">
     <div class="col-md-5">
         <div class="card">
-            <div class="card-header">新增转单</div>
+            <div class="card-header">批量新增转单</div>
             <div class="card-body">
-                <form method="post" action="{{ url_for('transfer_add') }}">
-                    <div class="mb-3">
-                        <label class="form-label">转出加工户</label>
-                        <select name="from_processor_id" class="form-select" required>
-                            <option value="">请选择</option>
-                            {% for p in processors %}
-                            <option value="{{ p.id }}">{{ p.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">转入加工户</label>
-                        <select name="to_processor_id" class="form-select" required>
-                            <option value="">请选择</option>
-                            {% for p in processors %}
-                            <option value="{{ p.id }}">{{ p.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">产品</label>
-                        <select name="product_id" class="form-select">
-                            <option value="">请选择</option>
-                            {% for p in products %}
-                            <option value="{{ p.id }}">{{ p.name }}</option>
-                            {% endfor %}
-                        </select>
+                <form method="post" action="{{ url_for('transfer_add') }}" id="transferForm">
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">转出加工户 <span class="text-danger">*</span></label>
+                            <select name="from_processor_id" class="form-select" required id="fromProcessorSelect">
+                                <option value="">请选择</option>
+                                {% for p in processors %}
+                                <option value="{{ p.id }}">{{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label">转入加工户 <span class="text-danger">*</span></label>
+                            <select name="to_processor_id" class="form-select" required>
+                                <option value="">请选择</option>
+                                {% for p in processors %}
+                                <option value="{{ p.id }}">{{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
                     </div>
                     <div class="row mb-3">
                         <div class="col">
-                            <label class="form-label">数量</label>
-                            <input name="quantity" class="form-control" type="number" step="0.01">
+                            <label class="form-label">日期</label>
+                            <input name="transfer_date" class="form-control" type="date" value="{{ today() }}">
                         </div>
                         <div class="col">
-                            <label class="form-label">日期</label>
-                            <input name="transfer_date" class="form-control" type="date">
+                            <label class="form-label">备注</label>
+                            <input name="notes" class="form-control" placeholder="整单备注">
                         </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">备注</label>
-                        <input name="notes" class="form-control">
-                    </div>
-                    <button type="submit" class="btn btn-primary">保存</button>
+
+                    <h6 class="fw-bold mb-2">转单明细</h6>
+                    <table class="table table-bordered table-sm mb-2" id="itemsTable">
+                        <thead>
+                            <tr>
+                                <th style="width:40%">产品</th>
+                                <th style="width:20%">数量</th>
+                                <th style="width:25%">备注</th>
+                                <th style="width:15%">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="itemsBody">
+                            <tr class="item-row">
+                                <td>
+                                    <select name="product_id[]" class="form-select form-select-sm product-select" disabled>
+                                        <option value="">请先选择转出加工户</option>
+                                    </select>
+                                </td>
+                                <td><input name="quantity[]" class="form-control form-control-sm" type="number" step="0.01" placeholder="数量"></td>
+                                <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="行备注"></td>
+                                <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <button type="button" class="btn btn-outline-success btn-sm mb-3" onclick="addRow()">+ 添加一行</button>
+                    <br>
+                    <button type="submit" class="btn btn-primary">保存全部</button>
                 </form>
             </div>
         </div>
@@ -71,26 +86,203 @@
             <div class="card-body p-0">
                 <table class="table table-sm table-hover mb-0">
                     <thead>
-                        <tr><th>日期</th><th>转出</th><th>→</th><th>转入</th><th>产品</th><th>数量</th><th>备注</th></tr>
+                        <tr><th>日期</th><th>转出</th><th>&rarr;</th><th>转入</th><th>产品</th><th>数量</th><th>加工单价</th><th>加工费</th><th>备注</th><th>操作</th></tr>
                     </thead>
                     <tbody>
-                        {% for t in transfers %}
+                        {% for td in transfers %}
+                        {% set t = td.transfer %}
                         <tr>
                             <td>{{ t.transfer_date or '-' }}</td>
                             <td>{{ t.from_processor.name }}</td>
-                            <td>→</td>
+                            <td>&rarr;</td>
                             <td>{{ t.to_processor.name }}</td>
                             <td>{{ t.product.name if t.product else '-' }}</td>
                             <td>{{ '%.1f'|format(t.quantity) }}</td>
+                            <td>{% if td.unit_price > 0 %}{{ '%.2f'|format(td.unit_price) }}{% else %}<span class="text-muted">未定价</span>{% endif %}</td>
+                            <td class="fw-bold {{ 'text-primary' if td.fee > 0 else '' }}">{{ '%.2f'|format(td.fee) }}</td>
                             <td class="text-muted">{{ t.notes or '' }}</td>
+                            <td>
+                                <button class="btn btn-outline-primary btn-sm" onclick="editTransfer({{ t.id }})">编辑</button>
+                                <form method="post" action="{{ url_for('transfer_delete', id=t.id) }}" style="display:inline" onsubmit="return confirm('确定删除这笔转单记录吗？')">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">删除</button>
+                                </form>
+                            </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="7" class="text-center text-muted py-4">暂无转单记录</td></tr>
+                        <tr><td colspan="10" class="text-center text-muted py-4">暂无转单记录</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
+                {% if transfers %}
+                <div class="card-footer text-end fw-bold">
+                    加工费合计：{{ '%.2f'|format(total_fee) }} 元
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
 </div>
+
+<!-- 编辑转单模态框 -->
+<div class="modal fade" id="editTransferModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" id="editTransferForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑转单</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">转出加工户</label>
+                        <select name="from_processor_id" class="form-select" id="editFromProcessor" required>
+                            <option value="">请选择</option>
+                            {% for p in processors %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">转入加工户</label>
+                        <select name="to_processor_id" class="form-select" id="editToProcessor" required>
+                            <option value="">请选择</option>
+                            {% for p in processors %}
+                            <option value="{{ p.id }}">{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">产品</label>
+                        <select name="product_id" class="form-select" id="editProduct" required>
+                            <option value="">请选择</option>
+                            {% for prod in products %}
+                            <option value="{{ prod.id }}">{{ prod.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">数量</label>
+                            <input name="quantity" class="form-control" type="number" step="0.01" id="editQuantity">
+                        </div>
+                        <div class="col">
+                            <label class="form-label">加工单价</label>
+                            <input name="price" class="form-control" type="number" step="0.01" id="editPrice" placeholder="留空则使用定价">
+                        </div>
+                        <div class="col">
+                            <label class="form-label">日期</label>
+                            <input name="transfer_date" class="form-control" type="date" id="editDate" value="{{ today() }}">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <input name="notes" class="form-control" id="editNotes">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function editTransfer(id) {
+    fetch('/api/transfers/' + id)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('editFromProcessor').value = data.from_processor_id;
+            document.getElementById('editToProcessor').value = data.to_processor_id;
+            document.getElementById('editProduct').value = data.product_id;
+            refreshAutocomplete(document.getElementById('editProduct'));
+            document.getElementById('editQuantity').value = data.quantity;
+            document.getElementById('editPrice').value = data.price !== null ? data.price : '';
+            document.getElementById('editDate').value = data.transfer_date;
+            document.getElementById('editNotes').value = data.notes || '';
+            document.getElementById('editTransferForm').action = '/transfers/edit/' + id;
+            new bootstrap.Modal(document.getElementById('editTransferModal')).show();
+        });
+}
+
+let cachedProducts = {};
+
+document.getElementById('fromProcessorSelect').addEventListener('change', function() {
+    const pid = this.value;
+    updateProductOptions(pid);
+});
+
+function updateProductOptions(pid) {
+    if (!pid) {
+        document.querySelectorAll('.product-select').forEach(sel => {
+            sel.innerHTML = '<option value="">请先选择转出加工户</option>';
+            sel.disabled = true;
+            refreshAutocomplete(sel);
+        });
+        return;
+    }
+    if (cachedProducts[pid]) {
+        setProductOptions(cachedProducts[pid]);
+        return;
+    }
+    fetch('/api/processor/' + pid + '/products')
+        .then(r => r.json())
+        .then(data => {
+            cachedProducts[pid] = data;
+            setProductOptions(data);
+        });
+}
+
+function setProductOptions(products) {
+    let html = '<option value="">请选择</option>';
+    if (products && products.length > 0) {
+        products.forEach(p => {
+            html += '<option value="' + p.id + '">' + p.name + '（' + p.product_type + '）</option>';
+        });
+    }
+    document.querySelectorAll('.product-select').forEach(sel => {
+        const val = sel.value;
+        sel.innerHTML = html;
+        sel.value = val;
+        sel.disabled = false;
+        refreshAutocomplete(sel);
+    });
+}
+
+function addRow() {
+    const tbody = document.getElementById('itemsBody');
+    const pid = document.getElementById('fromProcessorSelect').value;
+    let optionsHtml = '<option value="">请先选择转出加工户</option>';
+    if (pid && cachedProducts[pid]) {
+        optionsHtml = '<option value="">请选择</option>';
+        cachedProducts[pid].forEach(p => {
+            optionsHtml += '<option value="' + p.id + '">' + p.name + '（' + p.product_type + '）</option>';
+        });
+    }
+    const tr = document.createElement('tr');
+    tr.className = 'item-row';
+    tr.innerHTML =
+        '<td><select name="product_id[]" class="form-select form-select-sm product-select"' + (pid ? '' : ' disabled') + '>' + optionsHtml + '</select></td>' +
+        '<td><input name="quantity[]" class="form-control form-control-sm" type="number" step="0.01" placeholder="数量"></td>' +
+        '<td><input name="item_notes[]" class="form-control form-control-sm" placeholder="行备注"></td>' +
+        '<td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>';
+    tbody.appendChild(tr);
+    initAutocomplete(tr.querySelector('.product-select'));
+}
+
+function removeRow(btn) {
+    const rows = document.querySelectorAll('.item-row');
+    if (rows.length <= 1) return;
+    btn.closest('tr').remove();
+}
+
+// 初始化自动补全
+(function() {
+    document.querySelectorAll('.product-select').forEach(initAutocomplete);
+    initAutocomplete(document.getElementById('editProduct'));
+})();
+</script>
 {% endblock %}

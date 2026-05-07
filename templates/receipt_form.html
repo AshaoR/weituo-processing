@@ -19,7 +19,7 @@
                 <div class="col-md-3">
                     <label class="form-label">收货日期 <span class="text-danger">*</span></label>
                     <input name="receipt_date" type="date" class="form-control"
-                           value="{{ receipt.receipt_date if receipt else '' }}" required>
+                           value="{{ receipt.receipt_date if receipt else today() }}" required>
                 </div>
                 <div class="col-md-5">
                     <label class="form-label">备注</label>
@@ -102,6 +102,7 @@ function updateProductOptions(pid) {
         document.querySelectorAll('.product-select').forEach(sel => {
             sel.innerHTML = '<option value="">请先选择加工户</option>';
             sel.disabled = true;
+            refreshAutocomplete(sel);
         });
         return;
     }
@@ -120,14 +121,30 @@ function updateProductOptions(pid) {
 function setProductOptions(products) {
     let html = '<option value="">请选择</option>';
     products.forEach(p => {
-        html += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+        html += `<option value="${p.id}">${p.name}</option>`;
     });
     document.querySelectorAll('.product-select').forEach(sel => {
         const val = sel.value;
         sel.innerHTML = html;
         sel.value = val;
         sel.disabled = false;
+        sel.addEventListener('change', autoFillPrice);
+        refreshAutocomplete(sel);
     });
+}
+
+function autoFillPrice() {
+    const sel = this;
+    const row = sel.closest('tr');
+    if (!row) return;
+    const pid = parseInt(document.getElementById('processorSelect').value);
+    const prodId = parseInt(sel.value);
+    if (!pid || !prodId || !cachedProducts[pid]) return;
+    const prod = cachedProducts[pid].find(p => p.id === prodId);
+    if (prod && prod.price) {
+        row.querySelector('.price').value = prod.price;
+        calcAmount(row.querySelector('.price'));
+    }
 }
 
 function addRow() {
@@ -137,7 +154,7 @@ function addRow() {
     if (pid && cachedProducts[pid]) {
         optionsHtml = '<option value="">请选择</option>';
         cachedProducts[pid].forEach(p => {
-            optionsHtml += `<option value="${p.id}">${p.name}（${p.product_type}）</option>`;
+            optionsHtml += `<option value="${p.id}">${p.name}</option>`;
         });
     }
     const tr = document.createElement('tr');
@@ -150,6 +167,9 @@ function addRow() {
         <td><input name="item_notes[]" class="form-control form-control-sm" placeholder="备注"></td>
         <td><button type="button" class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">删</button></td>`;
     tbody.appendChild(tr);
+    tr.querySelector('.product-select').addEventListener('change', autoFillPrice);
+    var _ps = tr.querySelector('.product-select');
+    initAutocomplete(_ps, function() { autoFillPrice.call(_ps); });
 }
 
 function removeRow(btn) {
@@ -166,6 +186,13 @@ function calcAmount(el) {
 }
 
 // 编辑模式：加载时自动加载加工户的产品
+// 初始化自动补全（产品下拉支持输入搜索）
+(function() {
+    document.querySelectorAll('.product-select').forEach(function(sel) {
+        initAutocomplete(sel, function() { autoFillPrice.call(sel); });
+    });
+})();
+
 {% if receipt %}
 (function() {
     const pid = document.getElementById('processorSelect').value;

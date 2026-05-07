@@ -7,22 +7,44 @@ Python + Flask + SQLite + 浏览器界面
 
 import os
 import sys
-import json
-from datetime import datetime, date
+import re
+import io
+import glob as gglob
+import shutil
+from datetime import datetime, timedelta
 from decimal import Decimal
+from collections import defaultdict
 
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
 from flask import (Flask, render_template, request, redirect, url_for,
-                   flash, jsonify, session, send_from_directory)
+                   flash, jsonify, send_file)
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, text, or_
+from sqlalchemy import func, text, or_, and_
+from sqlalchemy.orm import joinedload
 
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'data', 'database.db')
+# 检测是否在 PyInstaller 打包环境中运行
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    BASE_DIR = sys._MEIPASS  # 打包后的临时解压目录（_internal）
+    DATA_DIR = os.path.join(os.path.dirname(sys.executable), 'data')
+    # 首次运行时从包内复制数据库到数据目录
+    src_db = os.path.join(BASE_DIR, 'data', 'database.db')
+    if not os.path.exists(DATA_DIR) and os.path.exists(src_db):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        shutil.copy2(src_db, os.path.join(DATA_DIR, 'database.db'))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = os.path.join(BASE_DIR, 'data')
 
-app = Flask(__name__)
+DB_PATH = os.path.join(DATA_DIR, 'database.db')
+
+app = Flask(__name__,
+            template_folder=os.path.join(BASE_DIR, 'templates'))
 app.secret_key = 'weituojiagong-2026-secret-key'
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}?charset=utf-8'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -30,15 +52,18 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # 确保data目录存在
-os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# 已知加工户名（Excel导入时从文件名/备注中提取加工户名称）
+KNOWN_PROCESSOR_NAMES = ['徐正玺', '孙宇', '李春花', '李炳春', '董红国', '钱艳', '高明', '杨忠良']
 
 # ---------------------------------------------------------------------------
 # 模板上下文处理器
 # ---------------------------------------------------------------------------
 @app.context_processor
 def utility_processor():
-    from datetime import datetime
-    return {'now': lambda: datetime.now().strftime('%Y-%m-%d %H:%M')}
+    return {'now': lambda: datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'today': lambda: datetime.now().strftime('%Y-%m-%d')}
 
 # ---------------------------------------------------------------------------
 # 数据库模型
@@ -78,7 +103,7 @@ class Product(db.Model):
     """产品/半成品/原材料"""
     __tablename__ = 'products'
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False, unique=True)
+    name = db.Column(db.String(200), nullable=False)
     unit = db.Column(db.String(20), default='个')  # 个/对/米/公斤/袋
     category_id = db.Column(db.Integer, db.ForeignKey('product_categories.id'))
     product_type = db.Column(db.String(20), default='成品')  # 成品/半成品/原材料
@@ -169,6 +194,7 @@ class TransferRecord(db.Model):
     to_processor_id = db.Column(db.Integer, db.ForeignKey('processors.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'))
     quantity = db.Column(db.Float, default=0)
+    price = db.Column(db.Float, nullable=True)  # 加工单价，为空时从 ProcessorPrice 取
     transfer_date = db.Column(db.String(20))
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now)
@@ -195,13 +221,19 @@ class BeginInventory(db.Model):
 # 辅助函数
 # ---------------------------------------------------------------------------
 
-def get_inventory(processor_id=None, product_id=None):
-    """计算收发存汇总
-    结存 = SUM(期初) + SUM(发货) - SUM(收货)
-    注意：对加工户来说，发货是发给他们，收货是收回，所以他们的"库存"是：
-    结存 = 期初 + 发货 - 收货 （正数表示还在加工户手里）
+def get_inventory(processor_id=None, product_id=None, period=None):
+    """计算收发存汇总（含转单）
+    结存 = 期初 + 发货 + 转入 - 收货 - 转出
+    注：发货+转入视为进入加工户库存，收货+转出视为减少加工户库存。
+       转单数据自动纳入计算，正数表示货还在加工户手里。
+   如果指定 period（日期字符串如 '2026-02-28'），则只统计该日期前的数据。
     """
-    query = """
+    bi_filter = " AND bi.period = :period" if period else ""
+    ship_filter = " AND sh.shipment_date <= :period" if period else ""
+    receipt_filter = " AND rc.receipt_date <= :period" if period else ""
+    transfer_filter = " AND t.transfer_date <= :period" if period else ""
+
+    query = f"""
     SELECT
         p.id AS product_id,
         p.name AS product_name,
@@ -211,29 +243,51 @@ def get_inventory(processor_id=None, product_id=None):
         pr.name AS processor_name,
         COALESCE(bi.quantity, 0) AS begin_qty,
         COALESCE(s.total_ship, 0) AS ship_qty,
+        COALESCE(ti.total_in, 0) AS transfer_in_qty,
         COALESCE(r.total_receipt, 0) AS receipt_qty,
-        COALESCE(bi.quantity, 0) + COALESCE(s.total_ship, 0) - COALESCE(r.total_receipt, 0) AS balance
+        COALESCE(tr_out.total_out, 0) AS transfer_out_qty,
+        COALESCE(bi.quantity, 0) + COALESCE(s.total_ship, 0) + COALESCE(ti.total_in, 0)
+        - COALESCE(r.total_receipt, 0) - COALESCE(tr_out.total_out, 0) AS balance
     FROM products p
     CROSS JOIN processors pr
     LEFT JOIN begin_inventory bi ON bi.product_id = p.id AND bi.processor_id = pr.id
+        {bi_filter}
     LEFT JOIN (
-        SELECT si.product_id, si.shipment_id, sh.processor_id, SUM(si.quantity) AS total_ship
+        SELECT si.product_id, sh.processor_id, SUM(si.quantity) AS total_ship
         FROM shipment_items si
         JOIN shipments sh ON sh.id = si.shipment_id
+        WHERE 1=1{ship_filter}
         GROUP BY si.product_id, sh.processor_id
     ) s ON s.product_id = p.id AND s.processor_id = pr.id
     LEFT JOIN (
-        SELECT ri.product_id, ri.receipt_id, rc.processor_id, SUM(ri.quantity) AS total_receipt
+        SELECT ri.product_id, rc.processor_id, SUM(ri.quantity) AS total_receipt
         FROM receipt_items ri
         JOIN receipts rc ON rc.id = ri.receipt_id
+        WHERE 1=1{receipt_filter}
         GROUP BY ri.product_id, rc.processor_id
     ) r ON r.product_id = p.id AND r.processor_id = pr.id
+    LEFT JOIN (
+        SELECT to_processor_id AS processor_id, product_id, SUM(quantity) AS total_in
+        FROM transfer_records t
+        WHERE product_id IS NOT NULL{transfer_filter}
+        GROUP BY to_processor_id, product_id
+    ) ti ON ti.processor_id = pr.id AND ti.product_id = p.id
+    LEFT JOIN (
+        SELECT from_processor_id AS processor_id, product_id, SUM(quantity) AS total_out
+        FROM transfer_records t
+        WHERE product_id IS NOT NULL{transfer_filter}
+        GROUP BY from_processor_id, product_id
+    ) tr_out ON tr_out.processor_id = pr.id AND tr_out.product_id = p.id
     WHERE 1=1
         AND (COALESCE(bi.quantity, 0) != 0
              OR COALESCE(s.total_ship, 0) != 0
-             OR COALESCE(r.total_receipt, 0) != 0)
+             OR COALESCE(r.total_receipt, 0) != 0
+             OR COALESCE(ti.total_in, 0) != 0
+             OR COALESCE(tr_out.total_out, 0) != 0)
     """
     params = {}
+    if period:
+        params['period'] = period
     if processor_id:
         query += " AND pr.id = :pid"
         params['pid'] = processor_id
@@ -343,19 +397,17 @@ def processor_delete(id):
 
 @app.route('/products')
 def product_list():
-    # 重定向到单价页面（产品和单价合并管理）
+    # 产品和单价合并管理，跳转到单价页面
     return redirect(url_for('price_list'))
 
 
 @app.route('/products/add', methods=['POST'])
 def product_add():
     name = request.form.get('name', '').strip()
+    processor_id = request.form.get('processor_id', type=int)
     if not name:
         flash('请输入产品名称', 'danger')
-        return redirect(url_for('product_list'))
-    if Product.query.filter_by(name=name).first():
-        flash(f'产品 "{name}" 已存在', 'warning')
-        return redirect(url_for('product_list'))
+        return redirect(url_for('price_list', processor_id=processor_id))
     p = Product(name=name, unit=request.form.get('unit', '个'),
                 product_type=request.form.get('product_type', '成品'),
                 category_id=request.form.get('category_id') or None,
@@ -363,7 +415,7 @@ def product_add():
     db.session.add(p)
     db.session.commit()
     flash(f'产品 "{name}" 添加成功', 'success')
-    return redirect(url_for('product_list'))
+    return redirect(url_for('price_list', processor_id=processor_id))
 
 
 @app.route('/products/edit/<int:id>', methods=['POST'])
@@ -372,10 +424,6 @@ def product_edit(id):
     name = request.form.get('name', '').strip()
     if not name:
         flash('请输入产品名称', 'danger')
-        return redirect(url_for('product_list'))
-    existing = Product.query.filter_by(name=name).first()
-    if existing and existing.id != id:
-        flash(f'产品 "{name}" 已存在', 'warning')
         return redirect(url_for('product_list'))
     p.name = name
     p.unit = request.form.get('unit', '个')
@@ -408,13 +456,14 @@ def product_delete(id):
 @app.route('/prices')
 def price_list():
     processors = Processor.query.order_by(Processor.name).all()
-    all_products = Product.query.order_by(Product.product_type, Product.name).all()
+    all_products = Product.query.order_by(Product.name).all()
     pid = request.args.get('processor_id', type=int)
 
-    # 每个加工户的产品数量
-    processor_product_counts = {}
-    for p in processors:
-        processor_product_counts[p.id] = ProcessorPrice.query.filter_by(processor_id=p.id).count()
+    # 每个加工户的产品数量（批量查询避免 N+1）
+    counts = db.session.query(
+        ProcessorPrice.processor_id, func.count(ProcessorPrice.id)
+    ).group_by(ProcessorPrice.processor_id).all()
+    processor_product_counts = {pid: cnt for pid, cnt in counts}
 
     # 当前选中加工户的产品价格列表
     processor_prices = []
@@ -424,7 +473,7 @@ def price_list():
         if current_processor:
             processor_prices = db.session.query(ProcessorPrice).join(Product).filter(
                 ProcessorPrice.processor_id == pid
-            ).order_by(Product.product_type, Product.name).all()
+            ).order_by(Product.name).all()
 
     return render_template('prices.html', processors=processors,
                            all_products=all_products,
@@ -452,9 +501,16 @@ def price_save():
         pp = ProcessorPrice(processor_id=processor_id,
                             product_id=product_id, price=price_val)
         db.session.add(pp)
+    db.session.flush()
+
+    # 同步更新转单记录中该加工户+该产品的单价
+    TransferRecord.query.filter_by(
+        from_processor_id=processor_id, product_id=product_id
+    ).update({TransferRecord.price: price_val}, synchronize_session=False)
+
     db.session.commit()
     flash('单价保存成功', 'success')
-    return redirect(url_for('price_list'))
+    return redirect(url_for('price_list', processor_id=processor_id))
 
 
 @app.route('/prices/delete/<int:id>', methods=['POST'])
@@ -463,7 +519,7 @@ def price_delete(id):
     db.session.delete(pp)
     db.session.commit()
     flash('单价已删除', 'success')
-    return redirect(url_for('price_list'))
+    return redirect(url_for('price_list', processor_id=pp.processor_id))
 
 
 @app.route('/api/prices/<int:processor_id>/<int:product_id>')
@@ -492,6 +548,13 @@ def api_price_save():
         pp = ProcessorPrice(processor_id=processor_id,
                             product_id=product_id, price=price)
         db.session.add(pp)
+    db.session.flush()
+
+    # 同步更新转单记录中该加工户+该产品的单价
+    TransferRecord.query.filter_by(
+        from_processor_id=processor_id, product_id=product_id
+    ).update({TransferRecord.price: price}, synchronize_session=False)
+
     db.session.commit()
     return jsonify({'ok': True, 'id': pp.id, 'price': price})
 
@@ -516,13 +579,21 @@ def shipment_list():
     processors = Processor.query.order_by(Processor.name).all()
 
     # 按(日期, 加工户)分组合并
-    from collections import defaultdict
+    # 批量加载所有明细避免 N+1
+    shipment_ids = [s.id for s in shipments]
+    items_by_shipment = defaultdict(list)
+    if shipment_ids:
+        all_items = ShipmentItem.query.filter(
+            ShipmentItem.shipment_id.in_(shipment_ids)
+        ).options(joinedload(ShipmentItem.product)).all()
+        for item in all_items:
+            items_by_shipment[item.shipment_id].append(item)
+
     groups = defaultdict(list)
     for s in shipments:
         key = (s.shipment_date, s.processor_id, s.processor.name)
-        items = ShipmentItem.query.filter_by(shipment_id=s.id).all()
         products = []
-        for item in items:
+        for item in items_by_shipment.get(s.id, []):
             products.append({
                 'name': item.product.name,
                 'quantity': item.quantity,
@@ -611,54 +682,6 @@ def shipment_add(id=None):
     return redirect(url_for('shipment_list'))
 
 
-@app.route('/shipments/edit/<int:id>', methods=['GET', 'POST'])
-def shipment_edit(id):
-    shipment = Shipment.query.get_or_404(id)
-    if request.method == 'GET':
-        processors = Processor.query.order_by(Processor.name).all()
-        products = Product.query.order_by(Product.name).all()
-        items = ShipmentItem.query.filter_by(shipment_id=id).all()
-        return render_template('shipment_form.html', processors=processors,
-                               products=products, shipment=shipment, edit_items=items)
-
-    # POST - update
-    processor_id = request.form.get('processor_id', type=int)
-    shipment_date = request.form.get('shipment_date', '')
-    notes = request.form.get('notes', '')
-
-    if not processor_id or not shipment_date:
-        flash('请选择加工户和填写日期', 'danger')
-        return redirect(url_for('shipment_edit', id=id))
-
-    shipment.processor_id = processor_id
-    shipment.shipment_date = shipment_date
-    shipment.notes = notes
-    ShipmentItem.query.filter_by(shipment_id=id).delete()
-    db.session.flush()
-
-    product_ids = request.form.getlist('product_id[]')
-    quantities = request.form.getlist('quantity[]')
-    specs = request.form.getlist('spec[]')
-    item_notes = request.form.getlist('item_notes[]')
-
-    for i in range(len(product_ids)):
-        pid = int(product_ids[i]) if product_ids[i] else None
-        qty = float(quantities[i]) if quantities[i] else 0
-        if pid and qty != 0:
-            item = ShipmentItem(
-                shipment_id=shipment.id,
-                product_id=pid,
-                quantity=qty,
-                spec=specs[i] if i < len(specs) else '',
-                notes=item_notes[i] if i < len(item_notes) else ''
-            )
-            db.session.add(item)
-
-    db.session.commit()
-    flash('发货单已更新', 'success')
-    return redirect(url_for('shipment_list'))
-
-
 @app.route('/shipments/view/<int:id>')
 def shipment_view(id):
     shipment = Shipment.query.get_or_404(id)
@@ -695,13 +718,21 @@ def receipt_list():
     processors = Processor.query.order_by(Processor.name).all()
 
     # 按(日期, 加工户)分组合并
-    from collections import defaultdict
+    # 批量加载所有明细避免 N+1
+    receipt_ids = [r.id for r in receipts]
+    items_by_receipt = defaultdict(list)
+    if receipt_ids:
+        all_items = ReceiptItem.query.filter(
+            ReceiptItem.receipt_id.in_(receipt_ids)
+        ).options(joinedload(ReceiptItem.product)).all()
+        for item in all_items:
+            items_by_receipt[item.receipt_id].append(item)
+
     groups = defaultdict(list)
     for r in receipts:
         key = (r.receipt_date, r.processor_id, r.processor.name)
-        items = ReceiptItem.query.filter_by(receipt_id=r.id).all()
         products = []
-        for item in items:
+        for item in items_by_receipt.get(r.id, []):
             products.append({
                 'name': item.product.name,
                 'quantity': item.quantity,
@@ -869,7 +900,6 @@ def receipt_delete(id):
 @app.route('/inventory')
 def inventory_report():
     processor_id = request.args.get('processor_id', type=int)
-    product_type = request.args.get('product_type', '')
     anomaly_only = request.args.get('anomaly_only', type=int)
 
     inv_data = get_inventory(processor_id=processor_id)
@@ -877,15 +907,269 @@ def inventory_report():
 
     results = []
     for row in inv_data:
-        if product_type and row.product_type != product_type:
-            continue
         if anomaly_only and row.balance >= -0.01:
             continue
         results.append(row)
 
     return render_template('inventory.html', inventory=results,
                            processors=processors, processor_id=processor_id,
-                           product_type=product_type, anomaly_only=anomaly_only)
+                           anomaly_only=anomaly_only)
+
+
+# ---------------------------------------------------------------------------
+# 路由 - 期初库存管理
+# ---------------------------------------------------------------------------
+
+@app.route('/begin_inventory')
+def begin_inventory_list():
+    processor_id = request.args.get('processor_id', type=int)
+    period = request.args.get('period', '')
+    processors = Processor.query.order_by(Processor.name).all()
+
+    # 可用账期列表
+    period_rows = db.session.query(BeginInventory.period).distinct().order_by(BeginInventory.period.desc()).all()
+    available_periods = [r.period for r in period_rows]
+
+    query = BeginInventory.query.options(
+        joinedload(BeginInventory.product),
+        joinedload(BeginInventory.processor)
+    )
+    if processor_id:
+        query = query.filter(BeginInventory.processor_id == processor_id)
+    if period:
+        query = query.filter(BeginInventory.period == period)
+    records = query.order_by(BeginInventory.processor_id, BeginInventory.product_id).all()
+
+    all_products = Product.query.order_by(Product.name).all()
+
+    return render_template('begin_inventory.html', records=records,
+                           processors=processors, processor_id=processor_id,
+                           all_products=all_products,
+                           available_periods=available_periods, current_period=period)
+
+
+@app.route('/begin_inventory/add', methods=['POST'])
+def begin_inventory_add():
+    processor_id = request.form.get('processor_id', type=int)
+    product_id = request.form.get('product_id', type=int)
+    quantity = request.form.get('quantity', type=float, default=0)
+    period = request.form.get('period', '2026-02')
+
+    if not processor_id or not product_id:
+        flash('请选择加工户和产品', 'danger')
+        return redirect(url_for('begin_inventory_list'))
+
+    existing = BeginInventory.query.filter_by(
+        processor_id=processor_id, product_id=product_id).first()
+    if existing:
+        existing.quantity = quantity
+        existing.period = period
+    else:
+        bi = BeginInventory(processor_id=processor_id, product_id=product_id,
+                            quantity=quantity, period=period)
+        db.session.add(bi)
+    db.session.commit()
+    flash('期初库存已保存', 'success')
+    return redirect(url_for('begin_inventory_list'))
+
+
+@app.route('/begin_inventory/edit/<int:id>', methods=['POST'])
+def begin_inventory_edit(id):
+    bi = BeginInventory.query.get_or_404(id)
+    quantity = request.form.get('quantity', type=float, default=0)
+    bi.quantity = quantity
+    db.session.commit()
+    flash('期初库存已更新', 'success')
+    return redirect(url_for('begin_inventory_list'))
+
+
+@app.route('/begin_inventory/delete/<int:id>', methods=['POST'])
+def begin_inventory_delete(id):
+    bi = BeginInventory.query.get_or_404(id)
+    db.session.delete(bi)
+    db.session.commit()
+    flash('期初库存已删除', 'success')
+    return redirect(url_for('begin_inventory_list'))
+
+
+# ---------------------------------------------------------------------------
+# 路由 - 结账管理
+# ---------------------------------------------------------------------------
+
+def next_period(period):
+    """计算下一个账期日期：2026-02-28 → 2026-03-01"""
+    try:
+        d = datetime.strptime(period, '%Y-%m-%d').date()
+        return (d + timedelta(days=1)).strftime('%Y-%m-%d')
+    except ValueError:
+        return period
+
+
+@app.route('/closing')
+def closing_page():
+    processors = Processor.query.order_by(Processor.name).all()
+
+    # 可用账期列表
+    period_rows = db.session.query(BeginInventory.period).distinct().order_by(BeginInventory.period.desc()).all()
+    available_periods = [r.period for r in period_rows]
+
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    # 默认：从最近一次结账日的次日起，到今天
+    default_from = ''
+    if available_periods:
+        # 取最近一次结账后起始日（期初库存的所属期）
+        default_from = available_periods[0]
+    if not default_from:
+        default_from = today
+
+    from_date = request.args.get('from_date', default_from)
+    to_date = request.args.get('to_date', today)
+
+    next_period_str = next_period(to_date)
+
+    # 检查是否已结过账到下一期
+    has_next = BeginInventory.query.filter_by(period=next_period_str).count() > 0
+
+    # 获取各加工户加工汇总（按收货计算应付金额，日期范围）
+    receipt_where = " WHERE 1=1"
+    receipt_params = {}
+    if from_date:
+        receipt_where += " AND rc.receipt_date >= :from_date"
+        receipt_params['from_date'] = from_date
+    if to_date:
+        receipt_where += " AND rc.receipt_date <= :to_date"
+        receipt_params['to_date'] = to_date
+    receipt_summary_sql = f"""
+    SELECT
+        rc.processor_id,
+        pr.name AS processor_name,
+        ri.product_id,
+        p.name AS product_name,
+        p.unit,
+        SUM(ri.quantity) AS total_qty,
+        SUM(ri.amount) AS total_amount
+    FROM receipt_items ri
+    JOIN receipts rc ON rc.id = ri.receipt_id
+    JOIN processors pr ON pr.id = rc.processor_id
+    JOIN products p ON p.id = ri.product_id
+    {receipt_where}
+    GROUP BY rc.processor_id, ri.product_id
+    ORDER BY pr.name, p.name
+    """
+    receipt_rows = db.session.execute(text(receipt_summary_sql), receipt_params).fetchall() if not has_next else []
+
+    # 汇总各加工户应付总额
+    processor_totals = {}
+    for row in receipt_rows:
+        pid = row.processor_id
+        if pid not in processor_totals:
+            processor_totals[pid] = {
+                'processor_name': row.processor_name,
+                'total_amount': 0,
+            }
+        processor_totals[pid]['total_amount'] += row.total_amount or 0
+
+    return render_template('closing.html', processors=processors,
+                           current_period=to_date,
+                           next_period=next_period_str,
+                           has_next=has_next,
+                           receipt_rows=receipt_rows,
+                           processor_totals=processor_totals,
+                           available_periods=available_periods,
+                           from_date=from_date, to_date=to_date)
+
+
+@app.route('/closing/download', methods=['POST'])
+def closing_download():
+    """下载当期各加工户对账单 Excel"""
+    if openpyxl is None:
+        flash('缺少 openpyxl 库，无法生成 Excel', 'danger')
+        return redirect(url_for('closing_page'))
+
+    current_period = request.form.get('to_date', datetime.now().strftime('%Y-%m-%d'))
+
+    inv_data = get_inventory(period=current_period)
+    processors = Processor.query.order_by(Processor.name).all()
+
+    wb = openpyxl.Workbook()
+    # 删除默认sheet
+    wb.remove(wb.active)
+
+    # 按加工户分sheet
+    grouped = defaultdict(list)
+    for row in inv_data:
+        grouped[row.processor_id].append(row)
+
+    for pr in processors:
+        rows = grouped.get(pr.id, [])
+        ws = wb.create_sheet(title=pr.name[:31])  # sheet名最多31字符
+
+        # 标题
+        ws.merge_cells('A1:I1')
+        ws['A1'] = f'{pr.name} — 委托加工对账单（{current_period}）'
+        ws['A1'].font = openpyxl.styles.Font(bold=True, size=14)
+
+        # 表头
+        headers = ['产品', '单位', '类型', '期初数量', '发货', '转入', '收货', '转出', '结存']
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=3, column=col, value=h)
+            cell.font = openpyxl.styles.Font(bold=True)
+            cell.alignment = openpyxl.styles.Alignment(horizontal='center')
+
+        # 数据行
+        for i, row in enumerate(rows, 4):
+            ws.cell(row=i, column=1, value=row.product_name)
+            ws.cell(row=i, column=2, value=row.unit or '个')
+            ws.cell(row=i, column=3, value=row.product_type)
+            ws.cell(row=i, column=4, value=float(row.begin_qty or 0))
+            ws.cell(row=i, column=5, value=float(row.ship_qty or 0))
+            ws.cell(row=i, column=6, value=float(row.transfer_in_qty or 0))
+            ws.cell(row=i, column=7, value=float(row.receipt_qty or 0))
+            ws.cell(row=i, column=8, value=float(row.transfer_out_qty or 0))
+            ws.cell(row=i, column=9, value=float(row.balance or 0))
+
+        # 设置列宽
+        for col in range(1, 10):
+            ws.column_dimensions[chr(64 + col)].width = 14
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return send_file(output, as_attachment=True,
+                     download_name=f'委托加工对账单_{current_period}.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/closing/do', methods=['POST'])
+def closing_do():
+    """执行结账：当前结存 → 下一期期初库存"""
+    current_period = request.form.get('to_date', datetime.now().strftime('%Y-%m-%d'))
+    next_period_str = next_period(current_period)
+
+    # 检查是否已结过
+    if BeginInventory.query.filter_by(period=next_period_str).count() > 0:
+        flash(f'{next_period_str} 已有期初数据，请先清理再结账', 'warning')
+        return redirect(url_for('closing_page'))
+
+    inv_data = get_inventory(period=current_period)
+    created = 0
+    for row in inv_data:
+        if row.balance is None or abs(row.balance) < 0.001:
+            continue
+        bi = BeginInventory(
+            product_id=row.product_id,
+            processor_id=row.processor_id,
+            quantity=row.balance,
+            period=next_period_str,
+        )
+        db.session.add(bi)
+        created += 1
+
+    db.session.commit()
+    flash(f'结账完成！已生成 {created} 条 {next_period_str} 期初库存记录', 'success')
+    return redirect(url_for('begin_inventory_list', processor_id=''))
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +1199,28 @@ def finance():
     summary = db.session.execute(
         text(summary_query), params).fetchall()
 
+    # 转单加工费汇总（转出方应收的加工费）
+    transfer_fee_query = """
+    SELECT
+        pr.id,
+        pr.name,
+        COUNT(t.id) AS transfer_count,
+        COALESCE(SUM(t.quantity * pp.price), 0) AS total_fee
+    FROM processors pr
+    JOIN transfer_records t ON t.from_processor_id = pr.id
+    LEFT JOIN processor_prices pp ON pp.processor_id = t.from_processor_id AND pp.product_id = t.product_id
+    """
+    if processor_id:
+        transfer_fee_query += " WHERE pr.id = :tf_pid"
+        params['tf_pid'] = processor_id
+    transfer_fee_query += " GROUP BY pr.id, pr.name ORDER BY pr.name"
+
+    transfer_fees = db.session.execute(
+        text(transfer_fee_query), params).fetchall()
+
     return render_template('finance.html', processors=processors,
-                           summary=summary, processor_id=processor_id)
+                           summary=summary, processor_id=processor_id,
+                           transfer_fees=transfer_fees)
 
 
 # ---------------------------------------------------------------------------
@@ -938,17 +1242,100 @@ def transfer_list():
             )
         )
     transfers = query.order_by(TransferRecord.created_at.desc()).all()
+
+    # 为每笔转单计算加工费 = 转出方单价 × 数量
+    # 批量查询单价避免 N+1（仅对没有单独定价的转单查 ProcessorPrice）
+    price_pairs = {(t.from_processor_id, t.product_id) for t in transfers
+                   if t.product_id and t.from_processor_id and t.price is None}
+    price_map = {}
+    if price_pairs:
+        clauses = [and_(ProcessorPrice.processor_id == pid, ProcessorPrice.product_id == prod_id)
+                   for pid, prod_id in price_pairs]
+        for pp in ProcessorPrice.query.filter(or_(*clauses)).all():
+            price_map[(pp.processor_id, pp.product_id)] = pp.price or 0
+
+    transfer_data = []
+    total_fee = 0
+    for t in transfers:
+        # 优先使用转单上保存的单价，其次从 ProcessorPrice 取
+        unit_price = t.price if t.price is not None else price_map.get((t.from_processor_id, t.product_id), 0)
+        fee = unit_price * (t.quantity or 0)
+        total_fee += fee
+        transfer_data.append({
+            'transfer': t,
+            'unit_price': unit_price,
+            'fee': fee,
+        })
+
     return render_template('transfers.html', processors=processors,
-                           products=products, transfers=transfers,
-                           processor_id=processor_id)
+                           products=products, transfers=transfer_data,
+                           total_fee=total_fee, processor_id=processor_id)
 
 
 @app.route('/transfers/add', methods=['POST'])
 def transfer_add():
     from_pid = request.form.get('from_processor_id', type=int)
     to_pid = request.form.get('to_processor_id', type=int)
+    transfer_date = request.form.get('transfer_date', '')
+    notes = request.form.get('notes', '')
+
+    if not from_pid or not to_pid:
+        flash('请选择转出和转入加工户', 'danger')
+        return redirect(url_for('transfer_list'))
+
+    product_ids = request.form.getlist('product_id[]')
+    quantities = request.form.getlist('quantity[]')
+    item_notes = request.form.getlist('item_notes[]')
+
+    created = 0
+    for i in range(len(product_ids)):
+        pid = int(product_ids[i]) if product_ids[i] else None
+        qty = float(quantities[i]) if quantities[i] else 0
+        if pid and qty != 0:
+            t = TransferRecord(
+                from_processor_id=from_pid,
+                to_processor_id=to_pid,
+                product_id=pid,
+                quantity=qty,
+                transfer_date=transfer_date,
+                notes=item_notes[i] if i < len(item_notes) else ''
+            )
+            db.session.add(t)
+            created += 1
+
+    if created == 0:
+        flash('请至少添加一条产品记录', 'danger')
+        return redirect(url_for('transfer_list'))
+
+    db.session.commit()
+    flash(f'转单记录已添加（{created} 条）', 'success')
+    return redirect(url_for('transfer_list'))
+
+
+@app.route('/api/transfers/<int:id>')
+def api_transfer_get(id):
+    """返回单条转单记录 JSON"""
+    t = TransferRecord.query.get_or_404(id)
+    return jsonify({
+        'id': t.id,
+        'from_processor_id': t.from_processor_id,
+        'to_processor_id': t.to_processor_id,
+        'product_id': t.product_id,
+        'quantity': t.quantity,
+        'price': t.price,
+        'transfer_date': t.transfer_date or '',
+        'notes': t.notes or '',
+    })
+
+
+@app.route('/transfers/edit/<int:id>', methods=['POST'])
+def transfer_edit(id):
+    t = TransferRecord.query.get_or_404(id)
+    from_pid = request.form.get('from_processor_id', type=int)
+    to_pid = request.form.get('to_processor_id', type=int)
     product_id = request.form.get('product_id', type=int)
     quantity = request.form.get('quantity', type=float, default=0)
+    price = request.form.get('price', type=float)
     transfer_date = request.form.get('transfer_date', '')
     notes = request.form.get('notes', '')
 
@@ -956,12 +1343,24 @@ def transfer_add():
         flash('请完整填写转单信息', 'danger')
         return redirect(url_for('transfer_list'))
 
-    t = TransferRecord(from_processor_id=from_pid, to_processor_id=to_pid,
-                       product_id=product_id, quantity=quantity,
-                       transfer_date=transfer_date, notes=notes)
-    db.session.add(t)
+    t.from_processor_id = from_pid
+    t.to_processor_id = to_pid
+    t.product_id = product_id
+    t.quantity = quantity
+    t.price = price
+    t.transfer_date = transfer_date
+    t.notes = notes
     db.session.commit()
-    flash('转单记录已添加', 'success')
+    flash('转单记录已更新', 'success')
+    return redirect(url_for('transfer_list'))
+
+
+@app.route('/transfers/delete/<int:id>', methods=['POST'])
+def transfer_delete(id):
+    t = TransferRecord.query.get_or_404(id)
+    db.session.delete(t)
+    db.session.commit()
+    flash('转单记录已删除', 'success')
     return redirect(url_for('transfer_list'))
 
 
@@ -971,11 +1370,8 @@ def transfer_add():
 
 def extract_processor_name(fname):
     """从文件名中提取加工户名称"""
-    import re
     name = fname.replace('.xlsx', '')
-    # 已知的加工户名列表（会持续增加）
-    known_names = ['徐正玺', '孙宇', '李春花', '李炳春', '董红国', '钱艳', '高明', '杨忠良']
-    for kn in known_names:
+    for kn in KNOWN_PROCESSOR_NAMES:
         if kn in name:
             return kn
     # 尝试取最后一个中文人名（2-3个字）
@@ -987,9 +1383,7 @@ def extract_processor_name(fname):
 
 def extract_transfer_target(remark):
     """从备注中提取转单目标加工户，如 '转钱艳' → '钱艳'"""
-    import re
-    known_names = ['徐正玺', '孙宇', '李春花', '李炳春', '董红国', '钱艳', '高明', '杨忠良']
-    for kn in known_names:
+    for kn in KNOWN_PROCESSOR_NAMES:
         if kn in remark:
             return kn
     # 尝试取"转"后面的中文人名
@@ -1007,9 +1401,6 @@ def import_page():
 @app.route('/import/do', methods=['POST'])
 def import_do():
     """从压缩包目录导入Excel数据"""
-    import openpyxl
-    import glob as gglob
-
     zip_dir = request.form.get('source_dir', '').strip()
     if not zip_dir or not os.path.isdir(zip_dir):
         # 尝试默认路径
@@ -1397,16 +1788,7 @@ def find_or_create_product(name):
     if prod:
         return prod
     # 不存在则创建
-    # 判断类型
-    ptype = '成品'
-    if any(kw in name for kw in ['布匹', '内布', '棉（', '颗粒', '黑眼', '黑眼',
-                                   '鼻子', '嘴', '吊绳', '丝带', '线', '编织袋',
-                                   '螺纹带', '耳朵芯', '脚底']):
-        ptype = '原材料'
-    elif any(kw in name for kw in ['半成品', '皮壳']):
-        ptype = '半成品'
-
-    prod = Product(name=name, unit='个', product_type=ptype)
+    prod = Product(name=name, unit='个')
     db.session.add(prod)
     db.session.flush()
     return prod
@@ -1430,7 +1812,6 @@ def normalize_date(val):
         return datetime.now().strftime('%Y-%m-%d')
     # Excel 序列号
     try:
-        from datetime import timedelta
         serial = float(val)
         if serial > 40000:
             # Excel 日期序列号从1900-01-01开始
@@ -1447,10 +1828,8 @@ def normalize_date(val):
         m, d = parts
         return f'2026-{int(m):02d}-{int(d):02d}'
     if len(parts) == 3:
-        y, m, d = parts
-        if len(y) == 2:
-            y = '20' + y
-        return f'{y}-{int(m):02d}-{int(d):02d}'
+        _, m, d = parts
+        return f'2026-{int(m):02d}-{int(d):02d}'
     return s
 
 
@@ -1472,21 +1851,22 @@ def run_data_check():
                 'balance': row.balance,
                 'msg': f'{row.processor_name} - {row.product_name}: 结存={row.balance:.1f}（负数）'
             })
-        elif row.ship_qty == 0 and row.receipt_qty > 0:
+        elif row.ship_qty == 0 and row.transfer_in_qty == 0 and row.receipt_qty > 0:
             anomalies.append({
                 'type': 'receipt_no_shipment',
                 'processor': row.processor_name,
                 'product': row.product_name,
-                'msg': f'{row.processor_name} - {row.product_name}: 有收货({row.receipt_qty:.0f})但无发货记录'
+                'msg': f'{row.processor_name} - {row.product_name}: 有收货({row.receipt_qty:.0f})但无发货或转入记录'
             })
 
-    # 检查单价为0的收货
-    zero_price_items = db.session.query(ReceiptItem).filter(
-        ReceiptItem.unit_price == 0, ReceiptItem.quantity > 0).limit(20).all()
+    # 检查单价为0的收货（批量关联加载避免 N+1）
+    zero_price_items = db.session.query(ReceiptItem).options(
+        joinedload(ReceiptItem.product),
+        joinedload(ReceiptItem.receipt).joinedload(Receipt.processor)
+    ).filter(ReceiptItem.unit_price == 0, ReceiptItem.quantity > 0).limit(20).all()
     for item in zero_price_items:
-        r = Receipt.query.get(item.receipt_id)
-        p = Processor.query.get(r.processor_id) if r else None
-        prod = Product.query.get(item.product_id)
+        p = item.receipt.processor if item.receipt else None
+        prod = item.product
         anomalies.append({
             'type': 'zero_price',
             'processor': p.name if p else '?',
@@ -1515,33 +1895,34 @@ def api_processors():
 
 @app.route('/api/processor/<int:pid>/products')
 def api_processor_products(pid):
-    """返回指定加工户有定价的产品列表"""
-    pp_list = db.session.query(ProcessorPrice).join(Product).filter(
-        ProcessorPrice.processor_id == pid
-    ).order_by(Product.name).all()
+    """返回全部产品及该加工户的定价（无定价则为0）"""
+    products = Product.query.order_by(Product.name).all()
+    price_map = {}
+    for pp in ProcessorPrice.query.filter_by(processor_id=pid).all():
+        price_map[pp.product_id] = pp.price or 0
     result = []
-    for pp in pp_list:
+    for prod in products:
         result.append({
-            'id': pp.product.id,
-            'name': pp.product.name,
-            'unit': pp.product.unit or '个',
-            'product_type': pp.product.product_type or '成品',
-            'price': pp.price or 0,
+            'id': prod.id,
+            'name': prod.name,
+            'unit': prod.unit or '个',
+            'product_type': prod.product_type or '成品',
+            'price': price_map.get(prod.id, 0),
         })
     return jsonify(result)
 
 
-@app.route('/api/products/<int:id>/type', methods=['POST'])
-def api_product_update_type(id):
-    """修改产品类型"""
+@app.route('/api/products/<int:id>/rename', methods=['POST'])
+def api_product_rename(id):
+    """修改产品名称"""
     prod = Product.query.get_or_404(id)
     data = request.get_json()
-    new_type = data.get('product_type', '').strip()
-    if new_type in ['成品', '半成品', '原材料']:
-        prod.product_type = new_type
-        db.session.commit()
-        return jsonify({'ok': True, 'product_type': new_type})
-    return jsonify({'ok': False, 'msg': '无效的产品类型'})
+    new_name = data.get('name', '').strip()
+    if not new_name:
+        return jsonify({'ok': False, 'msg': '产品名称不能为空'})
+    prod.name = new_name
+    db.session.commit()
+    return jsonify({'ok': True, 'name': new_name})
 
 
 # ---------------------------------------------------------------------------
@@ -1555,12 +1936,38 @@ def init_db():
 
         # 兼容旧数据库：加工户增加工序字段
         try:
-            from sqlalchemy import text as sa_text
-            db.session.execute(sa_text(
+            db.session.execute(text(
                 "ALTER TABLE processors ADD COLUMN process_step VARCHAR(50) DEFAULT ''"))
             db.session.commit()
         except Exception:
             pass  # 字段已存在
+
+        # 移除 products.name 的唯一约束（SQLite 需重建表）
+        try:
+            idx = db.session.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='sqlite_autoindex_products_1'"
+            )).fetchone()
+            if idx:
+                db.session.execute(text("PRAGMA foreign_keys=OFF"))
+                db.session.execute(text("""
+                    CREATE TABLE products_new (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        name VARCHAR(200) NOT NULL,
+                        unit VARCHAR(20) DEFAULT '个',
+                        category_id INTEGER,
+                        product_type VARCHAR(20) DEFAULT '成品',
+                        notes TEXT,
+                        created_at DATETIME
+                    )
+                """))
+                db.session.execute(text("INSERT INTO products_new SELECT * FROM products"))
+                db.session.execute(text("DROP TABLE products"))
+                db.session.execute(text("ALTER TABLE products_new RENAME TO products"))
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+        finally:
+            db.session.execute(text("PRAGMA foreign_keys=ON"))
 
         # 创建默认分类
         if ProductCategory.query.count() == 0:

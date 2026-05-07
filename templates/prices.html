@@ -57,7 +57,7 @@
                             <th style="width:30px;">#</th>
                             <th>产品名称</th>
                             <th style="width:60px;">单位</th>
-                            <th style="width:70px;">类型</th>
+                            
                             <th style="width:150px;">加工单价（元）</th>
                             <th style="width:80px;">操作</th>
                         </tr>
@@ -67,17 +67,10 @@
                         {% for pp in processor_prices %}
                         <tr class="price-row">
                             <td class="text-muted">{{ loop.index }}</td>
-                            <td class="fw-bold">{{ pp.product.name }}</td>
-                            <td>{{ pp.product.unit or '个' }}</td>
-                            <td>
-                                <select class="form-select form-select-sm type-select"
-                                        data-prodid="{{ pp.product_id }}"
-                                        style="width:90px;">
-                                    <option value="成品" {{ 'selected' if pp.product.product_type=='成品' }}>成品</option>
-                                    <option value="半成品" {{ 'selected' if pp.product.product_type=='半成品' }}>半成品</option>
-                                    <option value="原材料" {{ 'selected' if pp.product.product_type=='原材料' }}>原材料</option>
-                                </select>
+                            <td class="fw-bold product-name-cell" data-prodid="{{ pp.product_id }}" data-name="{{ pp.product.name }}">
+                                <span class="product-name-text">{{ pp.product.name }}</span>
                             </td>
+                            <td>{{ pp.product.unit or '个' }}</td>
                             <td>
                                 <div class="input-group input-group-sm">
                                     <input type="number" step="0.01" class="form-control form-control-sm price-input"
@@ -97,7 +90,7 @@
                         {% endfor %}
                         {% else %}
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-5">
+                            <td colspan="5" class="text-center text-muted py-5">
                                 <i class="bi bi-inbox" style="font-size:2rem;display:block;margin-bottom:8px;"></i>
                                 {{ current_processor.name }} 还没有设置加工产品<br>
                                 点击右上角「新增产品」添加
@@ -142,7 +135,7 @@
                         <select name="product_id" class="form-select" required>
                             <option value="">请选择</option>
                             {% for prod in all_products %}
-                            <option value="{{ prod.id }}">{{ prod.name }}（{{ prod.product_type }}，{{ prod.unit or '个' }}）</option>
+                            <option value="{{ prod.id }}">{{ prod.name }}（{{ prod.unit or '个' }}）</option>
                             {% endfor %}
                         </select>
                         <div class="form-text">没有需要的产品？<a href="#" onclick="showNewProductForm();return false;">新建产品</a></div>
@@ -166,6 +159,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="post" action="{{ url_for('product_add') }}">
+                <input type="hidden" name="processor_id" value="{{ current_processor.id }}">
                 <div class="modal-header"><h5 class="modal-title">新建产品</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
                 <div class="modal-body">
@@ -184,11 +178,7 @@
                         </div>
                         <div class="col">
                             <label class="form-label">类型</label>
-                            <select name="product_type" class="form-select">
-                                <option value="成品">成品</option>
-                                <option value="半成品">半成品</option>
-                                <option value="原材料">原材料</option>
-                            </select>
+<input name="product_type" type="hidden" value="成品">
                         </div>
                     </div>
                 </div>
@@ -205,6 +195,15 @@
 
 {% block scripts %}
 <script>
+// 初始化自动补全
+(function() {
+    var m = document.getElementById('addProductModal');
+    if (m) {
+        initAutocomplete(m.querySelector('select[name="product_id"]'));
+    }
+})();
+
+
 // 搜索过滤
 document.getElementById('searchInput')?.addEventListener('input', function() {
     const q = this.value.toLowerCase().trim();
@@ -261,28 +260,61 @@ document.querySelectorAll('.price-input').forEach(input => {
     });
 });
 
-// 产品类型：改动即保存
-document.querySelectorAll('.type-select').forEach(sel => {
-    sel.addEventListener('change', function() {
-        const prodid = parseInt(this.dataset.prodid);
-        const val = this.value;
-        const orig = this.dataset.orig || val;
-        this.disabled = true;
-        fetch('/api/products/' + prodid + '/type', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({product_type: val})
-        })
-        .then(r => r.json())
-        .then(d => {
-            if (d.ok) {
-                this.dataset.orig = val;
+// 产品名称内联编辑
+document.querySelectorAll('.product-name-cell').forEach(cell => {
+    const span = cell.querySelector('.product-name-text');
+    const prodId = cell.dataset.prodid;
+    const origName = cell.dataset.name;
+
+    cell.style.cursor = 'pointer';
+    cell.addEventListener('click', function() {
+        if (this.querySelector('input')) return;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control form-control-sm';
+        input.value = span.textContent.trim();
+        input.style.width = '100%';
+        span.style.display = 'none';
+        cell.insertBefore(input, span);
+        input.focus();
+        input.select();
+
+        function cancelEdit() {
+            input.remove();
+            span.style.display = '';
+        }
+
+        function saveEdit() {
+            const newName = input.value.trim();
+            if (!newName || newName === span.textContent.trim()) {
+                cancelEdit();
+                return;
             }
-            this.disabled = false;
-        })
-        .catch(() => { this.disabled = false; });
+            input.disabled = true;
+            fetch('/api/products/' + prodId + '/rename', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: newName})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.ok) {
+                    span.textContent = d.name;
+                    cell.dataset.name = d.name;
+                } else {
+                    alert(d.msg || '修改失败');
+                }
+                cancelEdit();
+            })
+            .catch(() => { alert('保存失败'); cancelEdit(); });
+        }
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveEdit(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+        });
+        input.addEventListener('blur', saveEdit);
     });
-    sel.dataset.orig = sel.value;
 });
 
 function showNewProductForm() {
